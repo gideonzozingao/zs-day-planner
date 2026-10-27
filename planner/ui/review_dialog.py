@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
 
 from ..quickparse import describe, parse
 from ..theme.icons import make_icon
+from ..timespan import span_label
+from .. import status as STATUS
 from ..utils import fmt_duration
 from .dialogs import FadeDialog
 from .helpers import set_kind, set_role
@@ -203,11 +205,14 @@ class ReviewDialog(FadeDialog):
         _clear(self.unfinished_rows)
         self.carry = {}
         routine = self._routine_keys()
-        open_tasks = [t for t in self.store.for_day(self.today) if not t["done"]]
+        # unfinished tasks that end today (ones still running into later days aren't "left over")
+        end_of_day = (self.today + timedelta(days=1)).isoformat() + "T00:00"
+        open_tasks = [t for t in self.store.for_day(self.today) if t["status"] not in (STATUS.DONE, STATUS.CANCELLED)
+                      and t["end_at"] <= end_of_day]
         for t in open_tasks:
             is_routine = (t["title"], t["start"]) in routine
             r = QHBoxLayout()
-            when = f"{t['start']}  " if t["start"] else ""
+            when = span_label(t["start_at"], t["end_at"], self.today) + "  "
             cb = QCheckBox(f"{when}{t['title']}".replace("&", "&&") + ("   · routine" if is_routine else ""))
             cb.setChecked(not is_routine)
             self.carry[t["id"]] = cb
@@ -284,7 +289,7 @@ class ReviewDialog(FadeDialog):
             star.setAutoDefault(False)
             star.toggled.connect(self._stars_changed)
             self.stars[t["id"]] = star
-            when = f"{t['start']}–{t['end']}" if t["start"] else "Anytime"
+            when = span_label(t["start_at"], t["end_at"], d)
             title = QLabel(t["title"])
             title.setTextFormat(Qt.PlainText)
             r.addWidget(star)
@@ -311,7 +316,7 @@ class ReviewDialog(FadeDialog):
         text = self.plan_add.text()
         if text.strip():
             p = parse(text, self.today)
-            self.plan_preview.setText("→  " + describe(p, self.target, self.today))
+            self.plan_preview.setText("→  " + describe(p, self.target, self.today, self.store.workday()))
         else:
             self.plan_preview.setText("Enter adds it  ·  dates, times, #tags, !high are understood")
 

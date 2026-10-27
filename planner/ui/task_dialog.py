@@ -1,41 +1,80 @@
-"""New / edit task dialog with an inline subtask checklist."""
-from datetime import date, datetime
+"""New / edit task dialog: title, project, start and end date-time, note, tags, priority,
+repeat, and an inline subtask checklist.
 
-from PySide6.QtCore import QDate, Qt, QTime
+Every task has a start and an end date-time; the end may be on a later day.
+Moving the start keeps the length (the end moves with it); the end can't be before the start.
+"""
+from datetime import date, datetime, timedelta
+
+from PySide6.QtCore import QDate, QDateTime, QSize, Qt, QTime
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QCheckBox, QComboBox, QDateEdit, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QLineEdit,
-    QMessageBox, QPlainTextEdit, QTimeEdit,
+    QCheckBox, QComboBox, QDateTimeEdit, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPlainTextEdit, QPushButton,
 )
 
 from .. import recurrence as R
 from .. import status as STATUS
+from .. import timespan as TS
 from ..quickparse import PRIORITY_NAMES, normalize_tags
 from .dialogs import FadeDialog
-from .helpers import set_kind
+from .helpers import set_kind, set_role
+from .project_dialog import dot_icon
 from ..theme.icons import status_dot
 from .subtasks import SubtaskEditor
 
+DT_FORMAT = "ddd dd MMM yyyy   HH:mm"
+
+
+def qdt(dt: datetime) -> QDateTime:
+    return QDateTime(QDate(dt.year, dt.month, dt.day), QTime(dt.hour, dt.minute))
+
 
 class TaskDialog(FadeDialog):
-    def __init__(self, parent, d: date, colors, task=None, subtasks=(), prefill=None):
-        """prefill: a quickparse.Parsed to start a new task from (quick capture's Ctrl+Enter)."""
+    def __init__(self, parent, d, colors, task=None, subtasks=(), prefill=None, projects=(), project_id="",
+                 workday=TS.DEFAULT_WORKDAY):
+        """d: the day a new task starts on (None: today).
+        prefill: a quickparse.Parsed to start a new task from (quick capture's Ctrl+Enter).
+        projects: project dicts offered in the Project field; project_id preselects one.
+        workday: (HH:MM, HH:MM) used by the "Work day" button and for prefill without times."""
         super().__init__(parent)
         title = "Edit task" if task else "New task"
         self.setWindowTitle(title)
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
+        self.workday = workday
+        self._projects = {p["id"]: p for p in projects}
 
         self.title = QLineEdit()
         self.title.setPlaceholderText("What needs doing?")
-        self.date = QDateEdit(QDate(d.year, d.month, d.day))
-        self.date.setCalendarPopup(True)
-        self.has_time = QCheckBox("Scheduled time (enables popup reminders)")
-        self.start, self.end = QTimeEdit(), QTimeEdit()
+        self.project = QComboBox()
+        self.project.setIconSize(QSize(14, 14))
+        self.project.addItem("No project", "")
+        for p in projects:
+            self.project.addItem(dot_icon(p["color"]), p["name"], p["id"])
+
+        self.start = QDateTimeEdit()
+        self.end = QDateTimeEdit()
         for w in (self.start, self.end):
-            w.setDisplayFormat("HH:mm")
-            w.setButtonSymbols(QAbstractSpinBox.NoButtons)
-            w.findChild(QLineEdit).setTextMargins(13, 0, 0, 0)   # align with the other fields' padding
+            w.setCalendarPopup(True)
+            w.setDisplayFormat(DT_FORMAT)
+        self.length = set_role(QLabel(), "hint")
+        self.warn = set_role(QLabel(), "danger")
+        self.warn.setWordWrap(True)
+        self.warn.hide()
+        presets = QHBoxLayout()
+        presets.setSpacing(6)
+        for label, fn in (("30 min", lambda: self._set_length(30)), ("1 h", lambda: self._set_length(60)),
+                          ("2 h", lambda: self._set_length(120)), ("Work day", self._work_day),
+                          ("+1 day", self._plus_day)):
+            b = set_kind(QPushButton(label), "chip")
+            b.setStyleSheet("QPushButton{padding:0 10px;min-height:30px;}")
+            b.setAutoDefault(False)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(fn)
+            presets.addWidget(b)
+        presets.addStretch()
+
         self.note = QPlainTextEdit()
         self.note.setFixedHeight(64)
         self.note.setPlaceholderText("Optional note")
@@ -46,6 +85,7 @@ class TaskDialog(FadeDialog):
             self.priority.addItem(PRIORITY_NAMES[value], value)
         self.priority.setCurrentIndex(1)
         self.status = QComboBox()
+        self.status.setIconSize(QSize(12, 12))
         for st in STATUS.ORDER:
             self.status.addItem(status_dot(STATUS.color(st)), STATUS.label(st), st)
         self.status.setCurrentIndex(STATUS.ORDER.index(STATUS.OPEN))
@@ -54,46 +94,58 @@ class TaskDialog(FadeDialog):
         self.repeat = QComboBox()
         for rule in (R.NONE, R.DAILY, R.WEEKDAYS, R.WEEKLY, R.MONTHLY):
             self.repeat.addItem(R.LABELS[rule], rule)
-        self._repeat_locked = ""   # set when editing a single occurrence of an existing series
 
-        now = datetime.now()
-        s = QTime(now.hour, (now.minute // 5) * 5)
-        self.start.setTime(s)
-        self.end.setTime(s.addSecs(30 * 60) if s.hour() < 23 else QTime(23, 59))
-        self.has_time.setChecked(True)
+        # ---- initial values
         if task:
+            project_id = task.get("project_id", "")
+            sa, ea = TS.to_dt(task["start_at"]), TS.to_dt(task["end_at"])
             self.title.setText(task["title"])
             self.note.setPlainText(task["note"])
-            if task["start"]:
-                self.start.setTime(QTime.fromString(task["start"], "HH:mm"))
-                self.end.setTime(QTime.fromString(task["end"], "HH:mm"))
-            self.has_time.setChecked(bool(task["start"]))
             self._set_meta(task.get("priority", 1), task.get("tags", ""), task.get("pinned", False))
             self._set_repeat(task.get("recurrence", ""))
-            self.status.setCurrentIndex(max(0, self.status.findData(task.get("status", "open"))))
-        elif prefill is not None:
-            self.title.setText(prefill.title)
-            if prefill.date:
-                self.date.setDate(QDate(prefill.date.year, prefill.date.month, prefill.date.day))
-            if prefill.start:
-                self.start.setTime(QTime.fromString(prefill.start, "HH:mm"))
-                self.end.setTime(QTime.fromString(prefill.end, "HH:mm"))
-            self.has_time.setChecked(bool(prefill.start))
-            self._set_meta(prefill.priority if prefill.priority is not None else 1,
-                           " ".join(prefill.tags), prefill.pinned)
+            self.status.setCurrentIndex(max(0, self.status.findData(task.get("status", STATUS.OPEN))))
+        else:
+            day = d or date.today()
+            p = self._projects.get(project_id)
+            if p and prefill is None and d is None:
+                day = max(day, TS.to_dt(p["start_at"]).date())    # don't start before the project
+            sa = TS.default_start(day)
+            if p and sa < TS.to_dt(p["start_at"]):
+                sa = TS.to_dt(p["start_at"])
+            ea = sa + timedelta(minutes=30)
+            if prefill is not None:
+                self.title.setText(prefill.title)
+                pday = prefill.date or day
+                if prefill.start:
+                    sa, ea = TS.make_span(pday, prefill.start, prefill.end, workday)
+                elif prefill.date:
+                    sa, ea = TS.make_span(pday, "", "", workday)
+                self._set_meta(prefill.priority if prefill.priority is not None else 1,
+                               " ".join(prefill.tags), prefill.pinned)
+        self.project.setCurrentIndex(max(0, self.project.findData(project_id or "")))
+        self.start.setDateTime(qdt(sa))
+        self.end.setDateTime(qdt(ea))
+        self._length = ea - sa
         self.title.setCursorPosition(0)
-        self.has_time.toggled.connect(self._toggle)
-        self._toggle(self.has_time.isChecked())
+
+        self.start.dateTimeChanged.connect(self._start_changed)
+        self.end.dateTimeChanged.connect(self._end_changed)
+        self.project.currentIndexChanged.connect(self._update_info)
 
         self.subtasks = SubtaskEditor(colors, subtasks)
 
         form = QFormLayout()
         form.setVerticalSpacing(12)
         form.addRow("Task", self.title)
-        form.addRow("Date", self.date)
-        form.addRow("", self.has_time)
-        form.addRow("Start", self.start)
-        form.addRow("End", self.end)
+        if len(projects) or self.project.currentData():
+            form.addRow("Project", self.project)
+        else:
+            self.project.hide()
+        form.addRow("Starts", self.start)
+        form.addRow("Ends", self.end)
+        form.addRow("", presets)
+        form.addRow("Length", self.length)
+        form.addRow("", self.warn)
         form.addRow("Note", self.note)
         form.addRow("Tags", self.tags)
         meta = QHBoxLayout()
@@ -104,8 +156,6 @@ class TaskDialog(FadeDialog):
         form.addRow("Priority", meta)
         form.addRow("Status", self.status)
         form.addRow("Repeat", self.repeat)
-        self.date.dateChanged.connect(self._update_repeat_labels)
-        self._update_repeat_labels()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         save = set_kind(buttons.button(QDialogButtonBox.Save), "filled")
@@ -119,6 +169,7 @@ class TaskDialog(FadeDialog):
         lay.addLayout(form)
         lay.addWidget(self.subtasks)
         lay.addWidget(buttons)
+        self._update_info()
         self.title.setFocus()
 
     def keyPressEvent(self, e):
@@ -129,6 +180,59 @@ class TaskDialog(FadeDialog):
                 return
         super().keyPressEvent(e)
 
+    # ---- span
+    def _sa(self) -> datetime:
+        return self.start.dateTime().toPython().replace(second=0, microsecond=0)
+
+    def _ea(self) -> datetime:
+        return self.end.dateTime().toPython().replace(second=0, microsecond=0)
+
+    def _start_changed(self, *_):
+        """Moving the start keeps the task's length: the end follows."""
+        self.end.blockSignals(True)
+        self.end.setDateTime(qdt(self._sa() + self._length))
+        self.end.blockSignals(False)
+        self._update_info()
+
+    def _end_changed(self, *_):
+        if self._ea() > self._sa():
+            self._length = self._ea() - self._sa()
+        self._update_info()
+
+    def _set_length(self, minutes):
+        self._length = timedelta(minutes=minutes)
+        self._start_changed()
+
+    def _work_day(self):
+        sa, ea = TS.make_span(self._sa().date(), *self.workday)
+        self._length = ea - sa
+        self.start.setDateTime(qdt(sa))       # triggers _start_changed with the new length
+
+    def _plus_day(self):
+        self.end.setDateTime(qdt(self._ea() + timedelta(days=1)))
+
+    def _update_info(self, *_):
+        sa, ea = self._sa(), self._ea()
+        if ea <= sa:
+            self.length.setText("Ends before it starts")
+        else:
+            self.length.setText(TS.fmt_length((ea - sa).total_seconds())
+                                + (f"  ·  ends {ea:%a %d %b}" if ea.date() != sa.date() else ""))
+        warn = ""
+        p = self._projects.get(self.project.currentData() or "")
+        if p and ea > sa:
+            ps, pe = TS.to_dt(p["start_at"]), TS.to_dt(p["end_at"])
+            if sa < ps:
+                warn = f"Starts before the project does ({ps:%a %d %b %H:%M})."
+            elif ea > pe:
+                warn = f"Ends after the project's finish ({pe:%a %d %b %H:%M})."
+        self.warn.setText(warn)
+        self.warn.setVisible(bool(warn))
+        d = sa.date()
+        self.repeat.setItemText(self.repeat.findData(R.WEEKLY), f"Every {d:%A}")
+        self.repeat.setItemText(self.repeat.findData(R.MONTHLY), f"Monthly on the {R._ordinal(d.day)}")
+
+    # ---- meta
     def _set_meta(self, priority, tags, pinned):
         self.priority.setCurrentIndex(max(0, self.priority.findData(int(priority))))
         self.tags.setText(" ".join("#" + t for t in (tags or "").split()))
@@ -137,32 +241,25 @@ class TaskDialog(FadeDialog):
     def _set_repeat(self, rule):
         self.repeat.setCurrentIndex(max(0, self.repeat.findData(rule if R.is_valid(rule) else R.NONE)))
 
-    def _update_repeat_labels(self, *_):
-        d = self.date.date().toPython()
-        self.repeat.setItemText(self.repeat.findData(R.WEEKLY), f"Every {d:%A}")
-        self.repeat.setItemText(self.repeat.findData(R.MONTHLY), f"Monthly on the {R._ordinal(d.day)}")
-
-    def _toggle(self, on):
-        self.start.setEnabled(on)
-        self.end.setEnabled(on)
-
     def _accept(self):
         if not self.title.text().strip():
             QMessageBox.warning(self, "Missing title", "Please enter a task title.")
             self.title.setFocus()
             return
-        if self.has_time.isChecked() and self.end.time() <= self.start.time():
-            QMessageBox.warning(self, "Invalid time", "End time must be after start time.")
+        if self._ea() <= self._sa():
+            QMessageBox.warning(self, "Invalid time", "The end must be after the start.")
+            self.end.setFocus()
             return
         self.accept()
 
     def values(self):
-        timed = self.has_time.isChecked()
+        sa, ea = self._sa(), self._ea()
         return {
-            "date": self.date.date().toPython(),
+            "start_at": sa,
+            "end_at": ea,
+            "date": sa.date(),
+            "project_id": self.project.currentData() or "",
             "title": self.title.text().strip(),
-            "start": self.start.time().toString("HH:mm") if timed else "",
-            "end": self.end.time().toString("HH:mm") if timed else "",
             "note": self.note.toPlainText().strip(),
             "subtasks": self.subtasks.values(),
             "priority": self.priority.currentData(),

@@ -24,6 +24,7 @@ from .ui import MainWindow, ReminderPopup
 from .ui.quick_capture import QuickCapture
 from .ui.review_dialog import ReviewDialog
 from .ui.stats_dialog import StatsDialog
+from . import status as STATUS
 from .ui.update_dialog import UpdateDialog
 from .updater import UpdateManager
 
@@ -267,9 +268,10 @@ class PlannerApp:
         if self.window.isVisible():
             self.window.snack("Time to wrap up your day", "Start review", self.show_review)
 
-    def show_stats(self):
+    def show_stats(self, project_id=None):
         self.open_window()
-        StatsDialog(self.window, self.store, self.theme.c).exec()
+        StatsDialog(self.window, self.store, self.theme.c, project_id=project_id,
+                    on_open_project=self.window.show_projects).exec()
 
     def show_review(self):
         self.open_window()
@@ -301,11 +303,10 @@ class PlannerApp:
         key = now.strftime("%Y-%m-%d %H:%M")
         if key == self.last_fired:
             return
-        starts = {t["start"] for t in self.store.for_day(now.date())
-                  if t["start"] and not t["done"]
-                  and not (t["id"] in self.snoozed and now < self.snoozed[t["id"]])}
+        starts = {t["start_at"] for t in self.store.for_day(now.date())
+                  if t["status"] not in STATUS.INACTIVE and not (t["id"] in self.snoozed and now < self.snoozed[t["id"]])}
         focusing = self.focus.active and not self.focus.paused   # hold back hourly nudges
-        if (now.minute == 0 and not focusing) or now.strftime("%H:%M") in starts:
+        if (now.minute == 0 and not focusing) or now.strftime("%Y-%m-%dT%H:%M") in starts:
             self.last_fired = key
             self.show_popup(force=False)
 

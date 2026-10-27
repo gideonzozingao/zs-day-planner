@@ -113,7 +113,7 @@ class QuickCapture(QWidget):
         elif not p.title:
             self.preview.setText("Add a title")
         else:
-            self.preview.setText("→  " + describe(p, today, today))
+            self.preview.setText("→  " + describe(p, today, today, self.store.workday()))
 
     def _add(self, keep_open):
         p = self._parsed()

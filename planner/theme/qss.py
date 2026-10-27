@@ -4,7 +4,7 @@ import re
 from PySide6.QtGui import QColor, QPalette
 
 from ..config import ICON_DIR
-from .icons import ARROW_PATH, CHECK_PATH
+from .icons import ARROW_PATH, CHECK_PATH, ICONS
 
 QSS = """
 QWidget { color: @onSurface@; font-size: 14px; }
@@ -64,13 +64,15 @@ QToolButton#railBtn { background: transparent; border: none; border-radius: 16px
 QToolButton#railBtn:hover { background: @onSurface:0.08@; }
 QToolButton#railBtn:checked { background: @secondaryContainer@; color: @onSecondaryContainer@; }
 
-QLineEdit, QDateEdit, QTimeEdit, QPlainTextEdit {
+QLineEdit, QDateEdit, QDateTimeEdit, QTimeEdit, QPlainTextEdit {
     background: transparent; border: 1px solid @outline@; border-radius: 8px; padding: 10px 14px;
     selection-background-color: @primaryContainer@; selection-color: @onPrimaryContainer@; }
-QLineEdit:hover, QDateEdit:hover, QTimeEdit:hover, QPlainTextEdit:hover { border-color: @onSurface@; }
-QLineEdit:focus, QDateEdit:focus, QTimeEdit:focus, QPlainTextEdit:focus {
+QLineEdit:hover, QDateEdit:hover, QDateTimeEdit:hover, QTimeEdit:hover, QPlainTextEdit:hover { border-color: @onSurface@; }
+QLineEdit:focus, QDateEdit:focus, QDateTimeEdit:focus, QTimeEdit:focus, QPlainTextEdit:focus {
     border: 2px solid @primary@; padding: 9px 13px; }
-QLineEdit:disabled, QTimeEdit:disabled { border-color: @outlineVariant@; color: @outline@; }
+QLineEdit:disabled, QTimeEdit:disabled, QDateEdit:disabled, QDateTimeEdit:disabled, QComboBox:disabled {
+    border-color: @outlineVariant@; color: @outline@; }
+QCheckBox:disabled { color: @outline@; }
 QLineEdit[flat="true"] { border: 1px solid transparent; padding: 6px 8px; }
 QLineEdit[flat="true"]:hover { border-color: @outlineVariant@; }
 QLineEdit[flat="true"]:focus { border: 2px solid @primary@; padding: 5px 7px; }
@@ -80,8 +82,8 @@ QLineEdit[done="true"] { color: @outline@; text-decoration: line-through; }
    the text area to 1 px and the time is invisible and can't be typed. */
 QTimeEdit::up-button, QTimeEdit::down-button { subcontrol-origin: border; width: 0px; border: none; }
 QTimeEdit::up-arrow, QTimeEdit::down-arrow { image: none; width: 0px; height: 0px; }
-QDateEdit::drop-down { border: none; width: 28px; }
-QDateEdit::down-arrow { image: url("@arrow@"); width: 18px; height: 18px; }
+QDateEdit::drop-down, QDateTimeEdit::drop-down { border: none; width: 28px; }
+QDateEdit::down-arrow, QDateTimeEdit::down-arrow { image: url("@arrow@"); width: 18px; height: 18px; }
 QCalendarWidget QWidget { background: @surfaceContainerHigh@; }
 QCalendarWidget QToolButton { color: @onSurface@; background: transparent; border-radius: 8px; padding: 6px 10px; }
 QCalendarWidget QToolButton:hover { background: @onSurface:0.08@; }
@@ -91,15 +93,30 @@ QCalendarWidget QAbstractItemView:disabled { color: @outline@; }
 QCalendarWidget QSpinBox { padding: 2px 6px; }
 
 QCheckBox { spacing: 12px; }
-QCheckBox::indicator, QTableView::indicator { width: 18px; height: 18px; border: 2px solid @outline@;
+QCheckBox::indicator, QTableView::indicator, QTreeView::indicator { width: 18px; height: 18px; border: 2px solid @outline@;
     border-radius: 4px; background: transparent; }
-QCheckBox::indicator:checked, QTableView::indicator:checked { background: @primary@;
+QCheckBox::indicator:checked, QTableView::indicator:checked, QTreeView::indicator:checked { background: @primary@;
     border-color: @primary@; image: url("@check@"); }
 
 QTableWidget { background: transparent; border: none; gridline-color: transparent;
     selection-background-color: @secondaryContainer@; selection-color: @onSecondaryContainer@; }
 QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid @outlineVariant@; }
 QTableWidget::item:selected { background: @secondaryContainer@; color: @onSecondaryContainer@; }
+QTreeWidget { background: transparent; border: none; outline: 0;
+    selection-background-color: @secondaryContainer@; selection-color: @onSecondaryContainer@; }
+QTreeWidget::item { min-height: 40px; padding: 2px 6px; border-bottom: 1px solid @outlineVariant@; }
+QTreeWidget::item:selected { background: @secondaryContainer@; color: @onSecondaryContainer@; }
+QTreeWidget::item:hover:!selected { background: @onSurface:0.05@; }
+QTreeWidget::branch { background: transparent; border-bottom: 1px solid @outlineVariant@; }
+QTreeWidget::branch:selected { background: @secondaryContainer@; }
+QTreeWidget::branch:has-children:closed { image: url("@chev@"); }
+QTreeWidget::branch:has-children:open { image: url("@arrow@"); }
+QTreeWidget QLineEdit { padding: 4px 8px; }
+QListWidget#projectList { background: transparent; border: none; outline: 0; }
+QListWidget#projectList::item { border-radius: 16px; margin: 0 0 6px 0; background: @surfaceContainerLow@; }
+QListWidget#projectList::item:hover { background: @surfaceContainer@; }
+QListWidget#projectList::item:selected { background: @secondaryContainer@; }
+QSplitter::handle { background: transparent; }
 QHeaderView { background: transparent; }
 QHeaderView::section { text-align: left; background: transparent; color: @onSurfaceVariant@; border: none;
     border-bottom: 1px solid @outlineVariant@; padding: 10px 8px; font-weight: 600; }
@@ -174,12 +191,15 @@ def _write_svg_assets(c):
                      f'<path fill="{c["onPrimary"]}" d="{CHECK_PATH}"/></svg>', encoding="utf-8")
     arrow.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
                      f'<path fill="{c["onSurfaceVariant"]}" d="{ARROW_PATH}"/></svg>', encoding="utf-8")
-    return check.as_posix(), arrow.as_posix()
+    chev = ICON_DIR / "chevron.svg"
+    chev.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+                    f'<path fill="{c["onSurfaceVariant"]}" d="{ICONS["chevron_right"]}"/></svg>', encoding="utf-8")
+    return check.as_posix(), arrow.as_posix(), chev.as_posix()
 
 
 def apply_theme(app, theme):
     c = dict(theme.c)
-    c["check"], c["arrow"] = _write_svg_assets(c)
+    c["check"], c["arrow"], c["chev"] = _write_svg_assets(c)
 
     def sub(m):
         val = c[m.group(1)]

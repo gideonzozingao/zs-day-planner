@@ -35,3 +35,11 @@ def fmt_clock(seconds) -> str:
     h, rem = divmod(s, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def rgba(hex_color: str, alpha: float) -> str:
+    """'#1A73E8', 0.2 -> 'rgba(26,115,232,51)' for stylesheets (Qt reads 8-digit hex as #AARRGGBB,
+    so appending an alpha byte to #RRGGBB gives the wrong colour)."""
+    h = (hex_color or "#888888").lstrip("#")[:6]
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{int(alpha * 255)})"

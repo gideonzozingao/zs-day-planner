@@ -1,19 +1,23 @@
 """Which tasks the reminder popup should show."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from .. import status as STATUS
 from ..config import LOOKAHEAD_MIN
-from ..utils import mins
+from ..timespan import to_str
 
 
 def reminder_sections(store, now: datetime, snoozed=None):
-    """-> (current, overdue, upcoming, anytime) lists of task dicts for today.
+    """-> (current, overdue, upcoming, later) lists of task dicts for today.
+    current: running now. overdue: ended (today) and not done. upcoming: starting within
+    LOOKAHEAD_MIN. later: open tasks starting later today.
     snoozed: {task_id: datetime} tasks to hide until their snooze expires."""
-    nm = now.hour * 60 + now.minute
     snoozed = snoozed or {}
+    n = to_str(now)
+    soon = to_str(now + timedelta(minutes=LOOKAHEAD_MIN))
     today = [t for t in store.for_day(now.date()) if not (t["id"] in snoozed and now < snoozed[t["id"]])]
-    timed = [t for t in today if t["start"]]
-    current = [t for t in timed if mins(t["start"]) <= nm < mins(t["end"])]
-    overdue = [t for t in timed if not t["done"] and mins(t["end"]) <= nm]
-    upcoming = [t for t in timed if not t["done"] and nm < mins(t["start"]) <= nm + LOOKAHEAD_MIN]
-    anytime = [t for t in today if not t["start"] and not t["done"]]
-    return current, overdue, upcoming, anytime
+    current = [t for t in today if t["start_at"] <= n < t["end_at"] and t["status"] != STATUS.CANCELLED]
+    active = [t for t in today if t["status"] not in STATUS.INACTIVE]   # not done/cancelled/postponed
+    overdue = [t for t in active if t["end_at"] <= n]
+    upcoming = [t for t in active if n < t["start_at"] <= soon]
+    later = [t for t in active if t["start_at"] > soon]
+    return current, overdue, upcoming, later

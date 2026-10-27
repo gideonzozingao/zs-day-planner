@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..data import reminder_sections
 from ..theme import make_icon
+from ..timespan import span_label
 from .helpers import set_kind, set_role
 from .motion import animate
 
@@ -17,7 +18,7 @@ SNOOZE_CHOICES = ((5, "5 min"), (15, "15 min"), (60, "1 hr"))
 
 
 def _label(t):
-    when = f"{t['start']}-{t['end']}  " if t["start"] else ""
+    when = span_label(t["start_at"], t["end_at"], datetime.now().date()) + "  "
     subs = f"  ({t['sub_done']}/{t['sub_total']})" if t.get("sub_total") else ""
     star = "★ " if t.get("pinned") else ""
     repeat = " ⟳" if t.get("recurrence") else ""
@@ -33,8 +34,8 @@ class ReminderPopup(QWidget):
         self.on_snooze, self.on_focus, self.theme = on_snooze, on_focus, theme
         self._entered = self._leaving = self._done = False
 
-        current, overdue, upcoming, anytime = reminder_sections(store, now, snoozed)
-        self.has_content = bool(current or overdue or upcoming or anytime)
+        current, overdue, upcoming, later = reminder_sections(store, now, snoozed)
+        self.has_content = bool(current or overdue or upcoming or later)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 16, 24, 32)
@@ -76,7 +77,7 @@ class ReminderPopup(QWidget):
         self._section(lay, f"OVERDUE ({len(overdue)})" if len(overdue) > 3 else "OVERDUE",
                       overdue[-3:], True, "danger")
         self._section(lay, "NEXT 3 HOURS", upcoming, False, "accent")
-        self._section(lay, "ANYTIME TODAY", anytime[:5], True, "accent")
+        self._section(lay, "LATER TODAY", later[:5], True, "accent")
         if not self.has_content:
             lay.addWidget(set_role(QLabel("Nothing scheduled right now."), "muted"))
 

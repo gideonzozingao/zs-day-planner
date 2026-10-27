@@ -1,24 +1,27 @@
-"""Main window: navigation rail, day view (task table), bottom bar, theme drawer."""
+"""Main window: navigation rail, day view (task table) or projects page, theme drawer."""
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QDate, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QColorDialog, QDateEdit, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMenu, QProgressBar, QPushButton, QSizePolicy, QSystemTrayIcon, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QMainWindow, QMenu, QProgressBar, QPushButton, QSizePolicy, QStackedWidget, QSystemTrayIcon,
+    QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..config import APP_NAME
 from .. import recurrence as R
 from .. import status as STATUS
-from ..theme import app_icon, make_icon, on_color
 from ..theme.icons import status_dot
+from ..theme import app_icon, make_icon, on_color
 from ..quickparse import HIGH, LOW, PRIORITY_NAMES, TAG_PALETTE, describe, parse, tag_color
-from ..utils import fmt_duration, fmt_stamp, mins
+from ..timespan import fmt_length, span_label, to_dt, to_str
+from ..utils import fmt_duration, fmt_stamp, rgba
 from .focus_bar import FocusBar
 from .helpers import set_kind, set_role
 from .motion import animate, crossfade
+from .project_dialog import dot_icon
+from .projects_page import ProjectsPage
 from .shortcuts import install_shortcuts
 from .snackbar import Snackbar
 from .task_actions import TaskActionsMixin
@@ -33,7 +36,8 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self._icons = []        # (widget, icon name, off colour role, on colour role)
         self._compact = False
         self._undo = []         # stack of (label, callable)
-        self._tag_filter = None  # None = all; otherwise a tag string
+        self._filter = None      # None = all; ("tag", name) or ("project", id)
+        self._projects = {}      # id -> project, refreshed with the day view
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(620, 540)
 
@@ -43,7 +47,12 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
         h.addWidget(self._build_rail())
-        h.addWidget(self._build_content(), 1)
+        self.stack = QStackedWidget()
+        self.day_page = self._build_content()
+        self.stack.addWidget(self.day_page)
+        self.projects_page = ProjectsPage(self)
+        self.stack.addWidget(self.projects_page)
+        h.addWidget(self.stack, 1)
         self.drawer = ThemeDrawer(self.theme)
         self.drawer.themeRequested.connect(lambda kw: self.change_theme(**kw))
         self.drawer.closeRequested.connect(self.toggle_drawer)
@@ -90,12 +99,14 @@ class MainWindow(QMainWindow, TaskActionsMixin):
 
         self.btn_today = rb("Today", "today", self.go_today, "Ctrl+T")
         self.btn_plan = rb("Plan", "event", self.plan_tomorrow, "Ctrl+P")
+        self.btn_projects = rb("Projects", "folder", self.show_projects, "Ctrl+J")
         self.btn_review = rb("Review", "done_all", lambda: self.app.show_review(), "Ctrl+E")
         self.btn_review.setCheckable(False)
-        self.btn_stats = rb("Stats", "chart", lambda: self.app.show_stats(), "Ctrl+Shift+S")
+        self.btn_stats = rb("Stats", "chart", self.show_stats, "Ctrl+Shift+S")
         self.btn_stats.setCheckable(False)
         self.btn_theme = rb("Theme", "palette", self.toggle_drawer, "Ctrl+,")
-        self.rail_buttons = [self.btn_today, self.btn_plan, self.btn_review, self.btn_stats, self.btn_theme]
+        self.rail_buttons = [self.btn_today, self.btn_plan, self.btn_projects, self.btn_review,
+                             self.btn_stats, self.btn_theme]
         lay.addStretch()
         return self.rail
 
@@ -294,25 +305,72 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             self.snackbar.dismiss()
         elif self.quick.hasFocus() and self.quick.text():
             self.quick.clear()
+        elif self.on_projects():
+            self.projects_page.tree.clearSelection()
         else:
             self.table.clearSelection()
             self.table.setFocus()
 
     def focus_quick(self):
-        self.quick.setFocus()
-        self.quick.selectAll()
+        q = self.projects_page.quick if self.on_projects() and self.projects_page.project() else self.quick
+        q.setFocus()
+        q.selectAll()
 
     def snack(self, text, action_text="", action=None):
         self.snackbar.show_message(text, action_text, action)
 
+    # ------------------------------------------------------------------ pages
+    def on_projects(self):
+        return self.stack.currentWidget() is self.projects_page
+
+    def _switch(self, page):
+        if self.stack.currentWidget() is page:
+            return False
+        crossfade(self.stack, lambda: self.stack.setCurrentWidget(page), 220)
+        return True
+
+    def show_projects(self, project_id=None, select=None):
+        self._switch(self.projects_page)
+        self.btn_projects.setChecked(True)
+        self.btn_today.setChecked(False)
+        self.btn_plan.setChecked(False)
+        if project_id:
+            self.projects_page.show_project(project_id, select_task=select)
+        else:
+            self.projects_page.refresh(select=select)
+        if self.projects_page.tree.isVisible():
+            self.projects_page.tree.setFocus()
+
+    def show_day(self, d=None, select=None):
+        self.btn_projects.setChecked(False)
+        self._switch(self.day_page)
+        if d is not None and d != self.current:
+            self.go_to(d)
+        self.refresh(select=select)
+        self.table.setFocus()
+
+    def show_stats(self):
+        """Statistics; from the projects page it opens on the current project's stats."""
+        pid = self.projects_page.current_id if self.on_projects() else None
+        self.app.show_stats(project_id=pid)
+
+    def new_project(self):
+        if not self.on_projects():
+            self.show_projects()
+        self.projects_page.new_project()
+
     # ------------------------------------------------------------------ navigation
     def go_today(self):
+        self.show_day()
         self.go_to(date.today())
 
     def shift_day(self, days):
         self.go_to(self.current + timedelta(days=days))
 
     def go_to(self, d: date):
+        if self.on_projects():
+            self.btn_projects.setChecked(False)
+            self.stack.setCurrentWidget(self.day_page)
         def apply():
             self.current = d
             self.date_edit.blockSignals(True)
@@ -334,40 +392,72 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             if it.widget():
                 it.widget().deleteLater()
         tags = self.store.all_tags()
-        self.filter_bar.setVisible(bool(tags))
-        if not tags:
-            self._tag_filter = None
+        counts = self.store.project_counts()
+        projects = [p for p in self.store.projects(include_done=False) if counts.get(p["id"])]
+        self.filter_bar.setVisible(bool(tags or projects))
+        if not (tags or projects):
+            self._filter = None
             return
+        if self._filter and self._filter[0] == "project" and self._filter[1] not in counts:
+            self._filter = None
         allb = set_kind(QPushButton("All"), "chip")
         allb.setCheckable(True)
-        allb.setChecked(self._tag_filter is None)
+        allb.setChecked(self._filter is None)
         allb.setCursor(Qt.PointingHandCursor)
         allb.clicked.connect(lambda: self._set_filter(None))
         self.filter_row.addWidget(allb)
-        for tag, count in tags:
-            col = self.tag_color(tag)
-            chip = set_kind(QPushButton(f"#{tag}  {count}"), "tagchip")
-            chip.setCheckable(True)
-            chip.setChecked(self._tag_filter == tag)
-            chip.setCursor(Qt.PointingHandCursor)
-            sel = self._tag_filter == tag
+
+        def chip(text, col, key, menu_fn, tip=""):
+            b = set_kind(QPushButton(text), "tagchip")
+            b.setCheckable(True)
+            sel = self._filter == key
+            b.setChecked(sel)
+            b.setCursor(Qt.PointingHandCursor)
+            if tip:
+                b.setToolTip(tip)
             fg = on_color(col) if sel else col
             bg = col if sel else "transparent"
-            chip.setStyleSheet(
+            b.setStyleSheet(
                 f"QPushButton{{background:{bg};color:{fg};border:1px solid {col};"
                 f"border-radius:8px;min-height:30px;padding:0 12px;font-weight:600;}}"
-                f"QPushButton:hover{{background:{col}2a;}}")
-            chip.clicked.connect(lambda _=False, t=tag: self._set_filter(t))
-            chip.setContextMenuPolicy(Qt.CustomContextMenu)
-            chip.customContextMenuRequested.connect(
-                lambda pos, t=tag, c=chip: self._tag_color_menu(c.mapToGlobal(pos), t))
-            self.filter_row.addWidget(chip)
+                f"QPushButton:hover{{background:{rgba(col, 0.16)};}}")
+            b.clicked.connect(lambda _=False: self._set_filter(key))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(lambda pos: menu_fn(b.mapToGlobal(pos)))
+            self.filter_row.addWidget(b)
+
+        for p in projects:
+            name = p["name"] if len(p["name"]) <= 22 else p["name"][:21] + "…"
+            chip(f"▣ {name}  {counts[p['id']]}", p["color"] or "#888888", ("project", p["id"]),
+                 lambda pos, pid=p["id"]: self._project_chip_menu(pos, pid),
+                 f"Project: {p['name']} ({counts[p['id']]} open). Right-click to open it")
+        for tag, count in tags:
+            chip(f"#{tag}  {count}", self.tag_color(tag), ("tag", tag),
+                 lambda pos, t=tag: self._tag_color_menu(pos, t))
         self.filter_row.addStretch()
 
-    def _set_filter(self, tag):
-        self._tag_filter = tag
+    def _set_filter(self, key):
+        self._filter = key
         self._rebuild_filter_bar()
         self.refresh()
+
+    def _project_chip_menu(self, pos, pid):
+        menu = QMenu(self)
+        self._menu_action(menu, "Open project", lambda: self.show_projects(pid), "folder")
+        menu.exec(pos)
+
+    def tag_to_project(self, tag):
+        p, snap = self.store.tag_to_project(tag, color=self.tag_color(tag))
+        if self._filter == ("tag", tag):
+            self._filter = None
+
+        def undo(s=snap):
+            self.store.undo_tag_to_project(s)
+        self._push_undo("convert tag", undo)
+        self.refresh()
+        n = len(snap["tasks"])
+        self.snack(f"Made project “{p['name']}” from {n} #{tag} task(s)", "Open",
+                   lambda: self.show_projects(p["id"]))
 
     def _tag_color_menu(self, pos, tag):
         menu = QMenu(self)
@@ -382,7 +472,20 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         reset = QAction("Reset to automatic", menu)
         reset.triggered.connect(lambda: self._apply_tag_color(tag, ""))
         menu.addAction(reset)
+        menu.addSeparator()
+        self._menu_action(menu, f"Convert #{tag} to a project…", lambda: self._confirm_tag_to_project(tag),
+                          "folder")
         menu.exec(pos)
+
+    def _confirm_tag_to_project(self, tag):
+        from PySide6.QtWidgets import QMessageBox
+        ans = QMessageBox.question(
+            self, "Convert tag to project",
+            f"Create a project “{tag}” and move every #{tag} task into it?\n\n"
+            f"The #{tag} tag is removed from those tasks (the project replaces it). "
+            f"Their dates don't change. You can undo this with Ctrl+Z.")
+        if ans == QMessageBox.Yes:
+            self.tag_to_project(tag)
 
     def _apply_tag_color(self, tag, color):
         self.store.set_tag_color(tag, color)
@@ -399,13 +502,16 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             self.quick_hint.hide()
             return
         p = parse(text, date.today())
-        self.quick_hint.setText("→  " + (describe(p, self.current, date.today()) if p.title else "add a title"))
+        self.quick_hint.setText("→  " + (describe(p, self.current, date.today(), self.store.workday()) if p.title else "add a title"))
         self.quick_hint.show()
 
     def _title_text(self, t):
         prefix = ("◉ " if self.app.focus.is_on(t["id"]) else "") + ("★ " if t["pinned"] else "") \
             + ("⚑ " if t["priority"] == HIGH else "") + ("⟳ " if t["recurrence"] else "")
         extras = []
+        p = self._projects.get(t["project_id"]) if t["project_id"] else None
+        if p and t["note"]:          # with no note, the project shows in the Note column instead
+            extras.append(f"› {p['name']}")
         if t["tags"] and t["note"]:   # if there's a note, keep tags inline in the title
             extras.append(" ".join("#" + x for x in t["tags"].split()))
         if t["sub_total"]:
@@ -414,9 +520,13 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             extras.append(f"⏱ {fmt_duration(t['focus_seconds'])}")
         return prefix + t["title"] + ("   " + "   ".join(extras) if extras else "")
 
-    @staticmethod
-    def _tooltip(t, subs):
-        tip = f"Created {fmt_stamp(t['created_at'])}"
+    def _tooltip(self, t, subs):
+        length = (to_dt(t["end_at"]) - to_dt(t["start_at"])).total_seconds()
+        tip = f"{span_label(t['start_at'], t['end_at'])}   ({fmt_length(length)})\n"
+        tip += f"Created {fmt_stamp(t['created_at'])}"
+        p = self._projects.get(t["project_id"]) if t["project_id"] else None
+        if p:
+            tip = f"Project: {p['name']}\n" + tip
         if t["completed_at"]:
             tip += f"\nCompleted {fmt_stamp(t['completed_at'])}"
         if t["priority"] != 1:
@@ -428,17 +538,27 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         return tip
 
     def refresh(self, select=None):
+        """Redraw whichever page is showing (task changes can come from either)."""
+        if self.on_projects():
+            self.projects_page.refresh(select=select)
+        else:
+            self.refresh_day(select=select)
+
+    def refresh_day(self, select=None):
         c = self.theme.c
         keep = select or self.selected_id()
+        self._projects = {p["id"]: p for p in self.store.projects()}
         self._rebuild_filter_bar()
         all_today = self.store.for_day(self.current)
-        if self._tag_filter:
-            tasks = [t for t in all_today if self._tag_filter in t["tags"].split()]
+        if self._filter and self._filter[0] == "tag":
+            tasks = [t for t in all_today if self._filter[1] in t["tags"].split()]
+        elif self._filter:
+            tasks = [t for t in all_today if t["project_id"] == self._filter[1]]
         else:
             tasks = all_today
         subs_by_task = self.store.subtasks_for_day(self.current)
         now = datetime.now()
-        nm = now.hour * 60 + now.minute
+        now_s = to_str(now)
         today = now.date()
         is_today = self.current == today
         tomorrow = today + timedelta(days=1)
@@ -460,9 +580,10 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             chk.setCheckState(Qt.Checked if t["done"] else Qt.Unchecked)
             chk.setData(Qt.UserRole, t["id"])
             self.table.setItem(r, 0, chk)
-            when = f"{t['start']}-{t['end']}" if t["start"] else "Anytime"
+            when = span_label(t["start_at"], t["end_at"], self.current)
             title = self._title_text(t)
             tip = self._tooltip(t, subs_by_task.get(t["id"], []))
+            proj = self._projects.get(t["project_id"]) if t["project_id"] else None
             items = [chk]
             # status pill cell (col 1): coloured dot + label, never struck through
             st = t["status"]
@@ -477,18 +598,21 @@ class MainWindow(QMainWindow, TaskActionsMixin):
                 it = QTableWidgetItem(text)
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 it.setToolTip(tip)
+                if col == 3 and proj:
+                    it.setIcon(dot_icon(proj["color"]))
                 self.table.setItem(r, col, it)
                 items.append(it)
-            tag_items = []    # tags get their own colour, not the row's done/priority colour
-            if t["tags"]:
-                first = t["tags"].split()[0]
-                tag_it = items[3]   # the Note column cell carries the tag colour accent
-                if not t["note"]:
-                    tag_it.setText(" ".join("#" + x for x in t["tags"].split()))
-                    tag_it.setForeground(QBrush(QColor(self.tag_color(first))))
-                    tag_items.append(tag_it)
-            live = is_today and t["start"] and mins(t["start"]) <= nm < mins(t["end"]) and not t["done"]
-            late = is_today and t["start"] and mins(t["end"]) <= nm and not t["done"]
+            tag_items = []    # tags/project get their own colour, not the row's done/priority colour
+            if (t["tags"] or proj) and not t["note"]:
+                tag_it = items[3]   # the Note column cell carries the project / tag colour accent
+                bits = ([f"▣ {proj['name']}"] if proj else []) + ["#" + x for x in t["tags"].split()]
+                tag_it.setText("   ".join(bits))
+                col = proj["color"] if proj else self.tag_color(t["tags"].split()[0])
+                tag_it.setForeground(QBrush(QColor(col or "#888888")))
+                tag_items.append(tag_it)
+            active = t["status"] not in STATUS.INACTIVE
+            live = t["start_at"] <= now_s < t["end_at"] and active
+            late = t["end_at"] <= now_s and active
             for it in items:
                 f = it.font()
                 f.setStrikeOut(t["status"] in (STATUS.DONE, STATUS.CANCELLED))
@@ -512,22 +636,26 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self.table.blockSignals(False)
         self.table.setVisible(bool(tasks))
         self.empty.setVisible(not tasks)
-        if not tasks and self._tag_filter and all_today:
-            self.empty.setText(f"No #{self._tag_filter} tasks today.")
+        if not tasks and self._filter and all_today:
+            label = f"#{self._filter[1]}" if self._filter[0] == "tag" \
+                else f"“{self._projects.get(self._filter[1], {}).get('name', 'project')}”"
+            self.empty.setText(f"No {label} tasks on this day.")
         elif not tasks:
             self.empty.setText("No tasks for this day.\nAdd one below (Ctrl+N), "
                                "or right-click to load your routine.")
 
         done = sum(1 for t in tasks if t["done"])
-        self.progress.setMaximum(max(len(tasks), 1))
+        planned = sum(1 for t in tasks if t["status"] != STATUS.CANCELLED)
+        self.progress.setMaximum(max(planned, 1))
         self.progress.setValue(done)
         wk_done, wk_total = self.store.stats(self.current - timedelta(days=6), self.current)
         focused = self.store.focus_seconds_on(self.current)
-        self.count_lbl.setText(f"{done} of {len(tasks)} done   ·   "
+        self.count_lbl.setText(f"{done} of {planned} done   ·   "
                                + (f"{fmt_duration(focused)} focused   ·   " if focused >= 60 else "")
                                + f"last 7 days: {wk_done}/{wk_total}")
 
     def _item_changed(self, item):
         if item.column() == 0:
-            self.store.update(item.data(Qt.UserRole), done=item.checkState() == Qt.Checked)
-            QTimer.singleShot(0, self.refresh)
+            tid = item.data(Qt.UserRole)
+            self.store.update(tid, done=item.checkState() == Qt.Checked)
+            QTimer.singleShot(0, lambda: (self.refresh(), self.task_done_changed(tid)))

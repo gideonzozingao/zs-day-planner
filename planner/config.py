@@ -62,7 +62,17 @@ SHORTCUT_HELP = [
         ("Ctrl+B", "Star as top task"),
         ("Ctrl+I", "Cycle status (open/in progress/done)"),
         ("Ctrl+Z", "Undo"),
-        ("Right-click", "Task actions, repeat, subtasks"),
+        ("Right-click", "Task actions, repeat, subtasks, project"),
+    ]),
+    ("PROJECTS", [
+        ("Ctrl+J", "Projects page"),
+        ("Ctrl+Shift+N", "New project"),
+        ("Ctrl+N", "New task in the open project"),
+        ("Insert", "Add subtask to selected task"),
+        ("Space / Enter", "Toggle done / edit (or rename subtask)"),
+        ("Ctrl+I", "Cycle task status"),
+        ("Alt+↑ / ↓", "Reorder tasks"),
+        ("Delete", "Delete task or subtask (undoable)"),
     ]),
     ("NAVIGATION", [
         ("Alt+← / →", "Previous / next day"),

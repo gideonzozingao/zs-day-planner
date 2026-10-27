@@ -263,8 +263,9 @@ def normalize_tags(text: str) -> str:
     return " ".join(out)
 
 
-def describe(p: Parsed, default_day: date, today: date) -> str:
-    """One-line preview, e.g. 'Tue 28 Oct · 14:00–15:00 · #dpp · High priority'."""
+def describe(p: Parsed, default_day: date, today: date, workday=None) -> str:
+    """One-line preview, e.g. 'Tue 28 Oct · 14:00–15:00 · #dpp · High priority'.
+    workday: (start, end) shown when no time was typed (tasks then span the working day)."""
     d = p.date or default_day
     if d == today:
         day = "Today"
@@ -272,7 +273,11 @@ def describe(p: Parsed, default_day: date, today: date) -> str:
         day = "Tomorrow"
     else:
         day = f"{d:%a %d %b}" + (f" {d.year}" if d.year != today.year else "")
-    parts = [day, f"{p.start}–{p.end}" if p.start else "Anytime"]
+    if p.start:
+        when = f"{p.start}–{p.end}"
+    else:
+        when = f"{workday[0]}–{workday[1]} (work day)" if workday else "Work day"
+    parts = [day, when]
     if p.tags:
         parts.append(" ".join("#" + t for t in p.tags))
     if p.priority is not None and p.priority != NORMAL:

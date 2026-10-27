@@ -8,21 +8,24 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from .utils import mins
+from .timespan import to_dt
 
 HEARTBEAT_S = 30
+MAX_AUTO_MIN = 180
 PRESETS = (15, 25, 50)
 
 
 def default_minutes(task, now: datetime, fallback: int) -> int:
-    """Rest of the task's time block if it's running now, else the block length, else fallback."""
-    if task.get("start") and task.get("end"):
-        s, e = mins(task["start"]), mins(task["end"])
-        nm = now.hour * 60 + now.minute
-        if task["date"] == now.date().isoformat() and s <= nm < e:
-            return max(5, e - nm)
-        if e > s:
-            return e - s
+    """Rest of the task's span if it's running now, else the span's length; spans longer than
+    MAX_AUTO_MIN (a whole day, several days) fall back to the default focus length."""
+    if task.get("start_at") and task.get("end_at"):
+        s, e = to_dt(task["start_at"]), to_dt(task["end_at"])
+        if s <= now < e:
+            left = int((e - now).total_seconds() // 60)
+            return max(5, left) if left <= MAX_AUTO_MIN else fallback
+        length = int((e - s).total_seconds() // 60)
+        if 0 < length <= MAX_AUTO_MIN:
+            return length
     return fallback
 
 

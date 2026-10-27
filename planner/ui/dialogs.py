@@ -61,7 +61,7 @@ class ShortcutsDialog(FadeDialog):
         cols.setSpacing(36)
         left, right = QVBoxLayout(), QVBoxLayout()
         for i, (section, rows) in enumerate(SHORTCUT_HELP):
-            col = left if i < 2 else right
+            col = right if i in (2, 3) else left
             col.addWidget(set_role(QLabel(section), "label"))
             grid = QGridLayout()
             grid.setHorizontalSpacing(16)
