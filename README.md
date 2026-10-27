@@ -1,10 +1,11 @@
-# Zuqongtech Daily Planner
+# Zuqongsoft Day Planner
 
 Material 3 tray planner: tasks with subtasks, reminders, routine, SQLite storage.
 
 ## Features
+
 - **Quick add from anywhere**: press `Ctrl+Alt+Space` in any app (or use the Start Menu
-  *Quick add* shortcut) and type naturally:
+  _Quick add_ shortcut) and type naturally:
   `Deploy staging tomorrow 2pm-3pm #dpp !high *`. Dates (`fri`, `next fri`, `31/10`, `in 3 days`),
   times (`2pm`, `14:00-15:30`, `at 3`, `for 45m`), `#tags`, `!high` / `!low` and `*`
   (top task) are understood. Put text in "quotes" to keep it literal. The main window's
@@ -12,55 +13,61 @@ Material 3 tray planner: tasks with subtasks, reminders, routine, SQLite storage
 - **Focus timer**: `Ctrl+F` on a task (or right-click → Focus). It defaults to the rest of the
   task's time block, otherwise 25 min. The tray icon shows a countdown ring, hourly reminders
   are held back while you focus, and time spent is logged per task (`⏱ 45m`).
-- **End-of-day review**: prompted at your routine's *Wrap-up* time (or `Ctrl+E`). It has three
+- **End-of-day review**: prompted at your routine's _Wrap-up_ time (or `Ctrl+E`). It has three
   steps: see what got done; move unfinished tasks to the next working day (routine blocks
   excluded); plan that day and star up to 3 top tasks.
-- **Snooze reminders**: the reminder popup has *Remind me in 5 / 15 / 60 min* and *Start now*
-  (which begins a focus session) alongside *Got it*.
+- **Snooze reminders**: the reminder popup has _Remind me in 5 / 15 / 60 min_ and _Start now_
+  (which begins a focus session) alongside _Got it_.
 - **Coloured tags with a filter**: tags get colours (auto, or right-click a filter chip to pick).
   The filter bar above the list narrows to one project at a time (#dpp, #autolense, #nastel…).
 - **Repeating tasks**: set a task to repeat daily, on weekdays, weekly or monthly in the task
-  dialog's *Repeat* field, or the right-click *Repeat* menu. Occurrences are created ahead
-  automatically; editing or deleting one occurrence leaves the rest alone, and *Delete whole
-  series* removes them all. This is separate from the routine.
+  dialog's _Repeat_ field, or the right-click _Repeat_ menu. Occurrences are created ahead
+  automatically; editing or deleting one occurrence leaves the rest alone, and _Delete whole
+  series_ removes them all. This is separate from the routine.
 - **Task status**: every task has a status with its own colour, shown as a pill in the list:
   Open, In progress, Done, Postponed, Cancelled, Blocked. Set it from the task dialog, the
-  right-click *Status* menu, or cycle Open → In progress → Done with **Ctrl+I**. The Done
+  right-click _Status_ menu, or cycle Open → In progress → Done with **Ctrl+I**. The Done
   checkbox and status stay in sync.
-- **Statistics** (*Stats* on the rail, tray, or **Ctrl+Shift+S**): a **Today** overview
+- **Statistics** (_Stats_ on the rail, tray, or **Ctrl+Shift+S**): a **Today** overview
   (completion %, tasks done, focus time, a status breakdown bar and per-tag progress) and an
   **Overall** view (active tasks, all-time completion, overdue count, focus time, the full
   status breakdown, a 14-day completion trend, and top tags).
 - Subtasks, tags, priorities, reminders, routine, undo, history, themes, auto-updates.
 
 ## Run from source
+
 ```
 pip install -r requirements.txt
 python daily_planner.py            # or: python -m planner [--tray]
 ```
 
 ## Build the Windows installer
+
 Requirements: Windows 10/11 x64, Python 3.10+ on PATH, Inno Setup 6.3+
 (`winget install JRSoftware.InnoSetup`).
 
 ```
 build.bat                          # or: .\build.ps1
 ```
+
 Output:
+
 - `dist\ZuqongtechPlanner\ZuqongtechPlanner.exe`: the app (runnable as-is)
 - `dist\installer\ZuqongtechPlanner-Setup-<version>.exe`: the installer to share
 
 ### Native (harder to reverse-engineer) builds with Nuitka
+
 PyInstaller bundles your `.py`/`.pyc` files, which decompile easily. Nuitka instead
 compiles the app to C and then to a native binary, so there's no bytecode to pull out.
 
 ```
 build.bat -Compiler nuitka          # or:  .\build.ps1 -Compiler nuitka
 ```
+
 Needs a C compiler. On Windows, Nuitka offers to download a bundled MinGW the first
 time (the build script accepts this automatically). First build is slow (a few minutes);
 later builds are cached. Output is the same `dist\ZuqongtechPlanner` folder and the same
-installer, so nothing else changes. In GitHub Actions, the *Release* workflow has a
+installer, so nothing else changes. In GitHub Actions, the _Release_ workflow has a
 **Build with** choice (defaults to `nuitka`); tag pushes use Nuitka too.
 
 Caveat: this raises the bar, it is not DRM. A determined attacker can still inspect a
@@ -70,11 +77,13 @@ Release a new version: bump `__version__` in `planner/__init__.py` and rebuild.
 The installer upgrades in place (fixed AppId) and closes a running copy first.
 
 ## Releasing updates (rolling releases)
+
 GitHub Releases is the update feed. Installed apps check it 20 s after start-up and
 then every 6 hours. They offer the update through a tray notification and a message
 bar, and install it silently, then restart.
 
-**Publish**: GitHub → Actions → *Release* → *Run workflow*. Pick:
+**Publish**: GitHub → Actions → _Release_ → _Run workflow_. Pick:
+
 - **bump**: `patch` (fixes), `minor` (features), `major` (breaking)
 - **channel**: `stable` (everyone) or `beta` (users who opted into Beta)
 
@@ -94,15 +103,17 @@ pre-release called `update-feed`. Don't delete it. The app downloads
 manifest carries the installer's SHA-256, and a download that doesn't match is discarded.
 
 **Requirements for the feed**
+
 - `UPDATE_REPO` in `planner/config.py` must be the repository that publishes releases.
 - The repository (or at least its releases) must be public. The app reads releases
   without a token.
 - Keep the asset name `ZuqongtechPlanner-Setup-<version>.exe`. The app matches it.
 
 **Users** choose the channel, turn auto-check on or off, skip a version, or check
-manually under ⋮ → *Check for updates…* (also in the tray menu).
+manually under ⋮ → _Check for updates…_ (also in the tray menu).
 
 ## What the installer does
+
 - Installs per-user to `%LOCALAPPDATA%\Programs\Zuqongtech\Daily Planner` (no admin
   prompt); it can instead install for all users.
 - Creates a Start Menu shortcut, and optionally a desktop shortcut.
@@ -110,10 +121,13 @@ manually under ⋮ → *Check for updates…* (also in the tray menu).
 - Uninstall asks whether to also delete your data. The default is to keep it.
 
 ## Data & logs
+
 `%USERPROFILE%\.zuqongtech_planner\`: `planner.db` (SQLite) and `planner.log`
 (crash log; the .exe has no console).
 
 ## Icon
+
 `packaging/assets/planner.ico` is generated from the theme colours:
 `pip install pillow && python packaging/make_icon.py`.
+
 # zs-day-planner
