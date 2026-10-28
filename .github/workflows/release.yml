@@ -1,12 +1,13 @@
 name: Release
 
+# release.yml
 # Ways to publish:
 #  1. Actions tab -> Release -> Run workflow: pick bump (patch/minor/major) and channel
 #     (stable/beta). The version is bumped, committed, tagged, built and published.
 #  2. Push a tag yourself (planner/__init__.py must already contain that version):
 #        git tag v1.2.0 && git push origin v1.2.0
-#  3. Rolling beta: uncomment `branches: [main]` below and every push to main
-#     publishes the next beta automatically.
+#  3. Rolling beta: every push to main (direct commit or merged PR) publishes
+#     the next beta automatically.
 # Installed apps on the matching channel are offered the update within ~6 hours.
 
 on:
@@ -28,8 +29,12 @@ on:
         options: [nuitka, pyinstaller]
         default: nuitka
   push:
+    branches: [main]
     tags: ["v*"]
-    # branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
 
 permissions:
   contents: write
@@ -49,6 +54,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Branch tip (not the triggering SHA) so queued runs see the previous bump commit
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -98,7 +105,7 @@ jobs:
 
       - name: Build app and installer
         shell: pwsh
-        # Tag pushes have no inputs, so default to the native (Nuitka) build there.
+        # Tag/branch pushes have no inputs, so default to the native (Nuitka) build there.
         run: ./build.ps1 -Compiler "${{ github.event.inputs.compiler || 'nuitka' }}"
 
       - uses: actions/upload-artifact@v4
