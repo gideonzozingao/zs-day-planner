@@ -23,6 +23,7 @@ from .helpers import set_kind, set_role
 from .motion import animate, crossfade
 from .project_dialog import dot_icon
 from .projects_page import ProjectsPage
+from .week import WeekPage
 from .shortcuts import install_shortcuts
 from .snackbar import Snackbar
 from .task_actions import TaskActionsMixin
@@ -53,6 +54,8 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self.stack.addWidget(self.day_page)
         self.projects_page = ProjectsPage(self)
         self.stack.addWidget(self.projects_page)
+        self.week_page = WeekPage(self)
+        self.stack.addWidget(self.week_page)
         h.addWidget(self.stack, 1)
         self.drawer = ThemeDrawer(self.theme)
         self.drawer.themeRequested.connect(lambda kw: self.change_theme(**kw))
@@ -100,13 +103,14 @@ class MainWindow(QMainWindow, TaskActionsMixin):
 
         self.btn_today = rb("Today", "today", self.go_today, "Ctrl+T")
         self.btn_plan = rb("Plan", "event", self.plan_tomorrow, "Ctrl+P")
+        self.btn_week = rb("Week", "view_week", self.show_week, "Ctrl+Shift+W")
         self.btn_projects = rb("Projects", "folder", self.show_projects, "Ctrl+J")
         self.btn_review = rb("Review", "done_all", lambda: self.app.show_review(), "Ctrl+E")
         self.btn_review.setCheckable(False)
         self.btn_stats = rb("Stats", "chart", self.show_stats, "Ctrl+Shift+S")
         self.btn_stats.setCheckable(False)
         self.btn_theme = rb("Theme", "palette", self.toggle_drawer, "Ctrl+,")
-        self.rail_buttons = [self.btn_today, self.btn_plan, self.btn_projects, self.btn_review,
+        self.rail_buttons = [self.btn_today, self.btn_plan, self.btn_week, self.btn_projects, self.btn_review,
                              self.btn_stats, self.btn_theme]
         lay.addStretch()
         return self.rail
@@ -324,6 +328,19 @@ class MainWindow(QMainWindow, TaskActionsMixin):
     def on_projects(self):
         return self.stack.currentWidget() is self.projects_page
 
+    def on_week(self):
+        return self.stack.currentWidget() is self.week_page
+
+    def _rail_check(self, active):
+        for b in (self.btn_today, self.btn_plan, self.btn_week, self.btn_projects):
+            b.setChecked(b is active)
+
+    def show_week(self, select=None):
+        self._switch(self.week_page)
+        self._rail_check(self.btn_week)
+        self.week_page.refresh(select=select)
+        self.week_page.focus_grid()
+
     def _switch(self, page):
         if self.stack.currentWidget() is page:
             return False
@@ -332,9 +349,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
 
     def show_projects(self, project_id=None, select=None):
         self._switch(self.projects_page)
-        self.btn_projects.setChecked(True)
-        self.btn_today.setChecked(False)
-        self.btn_plan.setChecked(False)
+        self._rail_check(self.btn_projects)
         if project_id:
             self.projects_page.show_project(project_id, select_task=select)
         else:
@@ -343,6 +358,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
 
     def show_day(self, d=None, select=None):
         self.btn_projects.setChecked(False)
+        self.btn_week.setChecked(False)
         self._switch(self.day_page)
         if d is not None and d != self.current:
             self.go_to(d)
@@ -368,8 +384,9 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self.go_to(self.current + timedelta(days=days))
 
     def go_to(self, d: date):
-        if self.on_projects():
+        if self.on_projects() or self.on_week():
             self.btn_projects.setChecked(False)
+            self.btn_week.setChecked(False)
             self.stack.setCurrentWidget(self.day_page)
         def apply():
             self.current = d
@@ -542,6 +559,8 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         """Redraw whichever page is showing (task changes can come from either)."""
         if self.on_projects():
             self.projects_page.refresh(select=select)
+        elif self.on_week():
+            self.week_page.refresh(select=select)
         else:
             self.refresh_day(select=select)
 

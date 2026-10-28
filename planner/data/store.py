@@ -435,6 +435,25 @@ class Store:
         return [self._sub(r) for r in self.db.execute(
             "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position", (tid,))]
 
+    def for_range(self, d0: date, d1: date):
+        """Tasks whose span overlaps any day from d0 to d1 (inclusive)."""
+        hi, _ = TS.day_bounds(d1)
+        _, lo = TS.day_bounds(d0)
+        rows = self.db.execute(TASK_SELECT + " WHERE t.start_at < ? AND t.end_at > ? GROUP BY t.id" + TASK_ORDER,
+                               (hi, lo))
+        return [self._task(r) for r in rows]
+
+    def open_tasks(self, project_id=None):
+        """Tasks still to do (open / in progress / blocked). project_id: None = all,
+        '' = only tasks outside projects, else that project's tasks. Ordered by project + number."""
+        sql = TASK_SELECT + " WHERE t.status IN ('open','in_progress','blocked')"
+        args = []
+        if project_id is not None:
+            sql += " AND t.project_id = ?"
+            args.append(project_id)
+        sql += " GROUP BY t.id ORDER BY t.project_id = '', t.project_id, t.number, t.start_at"
+        return [self._task(r) for r in self.db.execute(sql, args)]
+
     def subtasks_for_day(self, d: date):
         """-> {task_id: [subtask, ...]} for every task on that day."""
         out = {}

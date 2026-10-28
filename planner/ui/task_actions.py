@@ -28,6 +28,8 @@ class TaskActionsMixin:
     def selected_id(self):
         if self.on_projects():
             return self.projects_page.selected_task_id()
+        if self.on_week():
+            return self.week_page.selected_task_id()
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
         return item.data(Qt.UserRole) if item else None
@@ -78,6 +80,9 @@ class TaskActionsMixin:
 
     def _after_save(self, tid, day):
         """Show a just-saved task where it lives: its project page, or its start day."""
+        if self.on_week():
+            self.refresh(select=tid)
+            return
         if self.on_projects():
             t = self.store.find(tid)
             if t and t["project_id"] and t["project_id"] != self.projects_page.current_id:
@@ -92,7 +97,7 @@ class TaskActionsMixin:
                 self.go_to(day)
             self.refresh(select=tid)
 
-    def add_task(self, prefill=None):
+    def add_task(self, prefill=None, span=None):
         """New task. On the projects page it goes into the open project, starting no earlier
         than the project does."""
         in_project = self.projects_page.current_id if self.on_projects() else ""
@@ -102,7 +107,7 @@ class TaskActionsMixin:
             start_day = None if in_project else self.current
         dlg = TaskDialog(self, start_day, self.theme.c, prefill=prefill,
                          projects=self._project_choices(in_project), project_id=in_project,
-                         workday=self.store.workday())
+                         workday=self.store.workday(), span=span)
         if dlg.exec():
             v = dlg.values()
             t = self.store.add(None, v["title"], note=v["note"], start_at=v["start_at"], end_at=v["end_at"],
@@ -318,7 +323,7 @@ class TaskActionsMixin:
         snapshot = self.store.delete(task["id"])          # includes subtasks for undo
         self._push_undo("delete", lambda t=snapshot: (self.store.restore(t), t["id"])[1])
         self.refresh()
-        if self.table.rowCount():
+        if self.table.rowCount() and not (self.on_week() or self.on_projects()):
             self.table.setCurrentCell(min(row, self.table.rowCount() - 1), 3)
             self.table.setFocus()
         if task["recurrence"]:
@@ -459,11 +464,14 @@ class TaskActionsMixin:
             self._menu_action(sm, f"Open “{current['name']}”".replace("&", "&&"),
                               lambda: self.show_projects(current["id"], select=task["id"]), "folder")
 
-    def _show_menu(self, global_pos, row):
+    def _show_menu(self, global_pos, row, task_id=None):
+        """Task menu for a day-view row, or (task_id) for a task selected elsewhere (week planner)."""
         menu = QMenu(self)
         add = lambda *a, **k: self._menu_action(menu, *a, **k)
         task = None
-        if row >= 0:
+        if task_id:
+            task = self.store.find(task_id)
+        elif row >= 0:
             self.table.setCurrentCell(row, 3)
             task = self._selected_task()
         if task:

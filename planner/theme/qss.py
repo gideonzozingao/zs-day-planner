@@ -117,6 +117,11 @@ QListWidget#projectList::item { border-radius: 16px; margin: 0 0 6px 0; backgrou
 QListWidget#projectList::item:hover { background: @surfaceContainer@; }
 QListWidget#projectList::item:selected { background: @secondaryContainer@; }
 QSplitter::handle { background: transparent; }
+QListWidget#taskPool { background: transparent; border: none; outline: 0; }
+QListWidget#taskPool::item { background: @surface@; border: 1px solid @outlineVariant@; border-radius: 10px;
+    padding: 8px 8px; margin: 0 0 6px 0; color: @onSurface@; }
+QListWidget#taskPool::item:hover { border-color: @outline@; }
+QListWidget#taskPool::item:selected { border: 2px solid @primary@; background: @surface@; color: @onSurface@; }
 QScrollArea#kanban, QWidget#kanbanInner { background: transparent; border: none; }
 QFrame#kanbanColumn { background: @surfaceContainer@; border-radius: 16px; border: 2px solid transparent; }
 QFrame#kanbanColumn[dropTarget="true"] { border: 2px dashed @primary@; background: @primary:0.08@; }

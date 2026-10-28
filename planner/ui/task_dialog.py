@@ -33,7 +33,7 @@ def qdt(dt: datetime) -> QDateTime:
 
 class TaskDialog(FadeDialog):
     def __init__(self, parent, d, colors, task=None, subtasks=(), prefill=None, projects=(), project_id="",
-                 workday=TS.DEFAULT_WORKDAY):
+                 workday=TS.DEFAULT_WORKDAY, span=None):
         """d: the day a new task starts on (None: today).
         prefill: a quickparse.Parsed to start a new task from (quick capture's Ctrl+Enter).
         projects: project dicts offered in the Project field; project_id preselects one.
@@ -114,6 +114,8 @@ class TaskDialog(FadeDialog):
             if p and sa < TS.to_dt(p["start_at"]):
                 sa = TS.to_dt(p["start_at"])
             ea = sa + timedelta(minutes=30)
+            if span:                                    # e.g. a slot double-clicked in the week planner
+                sa, ea = span
             if prefill is not None:
                 self.title.setText(prefill.title)
                 pday = prefill.date or day
