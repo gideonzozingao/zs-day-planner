@@ -11,12 +11,15 @@ v6: every task and project has a start and end date-time: tasks.start_at / end_a
     projects.start_at / end_at ('YYYY-MM-DDTHH:MM'). tasks.date / start_time / end_time are
     kept in step with start_at / end_at (start day, start time, end time) for indexes and
     older code paths. Older rows are filled in by Store._backfill_spans().
+v9: task_deps (task waits for prerequisites), tasks.dep_blocked (status set to Blocked by a
+    dependency, so it can be reopened automatically), projects.task_checklist (subtasks every
+    new task in the project starts with), project_templates (saved project structures)
 v8: automatic numbering: tasks.number (per project, #1 #2 …) + tasks.sub_seq (subtask counter),
     subtasks.number, projects.task_seq (task counter). Filled in by Store._backfill_numbers().
 Every CREATE uses IF NOT EXISTS; columns added to existing tables are listed in
 ADDED_COLUMNS and applied by Store._migrate(), so older databases upgrade in place.
 """
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -41,7 +44,21 @@ CREATE TABLE IF NOT EXISTS tasks (
     end_at       TEXT NOT NULL DEFAULT '',    -- YYYY-MM-DDTHH:MM, after start_at (may be days later)
     status       TEXT NOT NULL DEFAULT 'open', -- open|in_progress|done|postponed|cancelled|blocked
     number       INTEGER NOT NULL DEFAULT 0,  -- #n within its project (0 = not in a project)
-    sub_seq      INTEGER NOT NULL DEFAULT 0   -- last subtask number handed out
+    sub_seq      INTEGER NOT NULL DEFAULT 0,  -- last subtask number handed out
+    dep_blocked  INTEGER NOT NULL DEFAULT 0   -- 1: Blocked because a prerequisite isn't done
+);
+CREATE TABLE IF NOT EXISTS task_deps (
+    task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,     -- waits ...
+    depends_on  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,     -- ... for this one
+    PRIMARY KEY (task_id, depends_on)
+);
+CREATE INDEX IF NOT EXISTS idx_deps_on ON task_deps(depends_on);
+CREATE TABLE IF NOT EXISTS project_templates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    data        TEXT NOT NULL,               -- JSON: colour, length, checklist, tasks (+ subtasks, deps)
+    created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_span ON tasks(start_at, end_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date);
@@ -62,7 +79,8 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     completed_at TEXT,
-    task_seq     INTEGER NOT NULL DEFAULT 0   -- last task number handed out
+    task_seq     INTEGER NOT NULL DEFAULT 0,  -- last task number handed out
+    task_checklist TEXT NOT NULL DEFAULT ''   -- JSON list of subtask titles for new tasks
 );
 
 CREATE TABLE IF NOT EXISTS tag_colors (
@@ -124,7 +142,7 @@ TASK_COLUMNS = {"date": "date", "start": "start_time", "end": "end_time",
                 "recurrence": "recurrence", "recur_parent": "recur_parent",
                 "project_id": "project_id", "project_pos": "project_pos",
                 "start_at": "start_at", "end_at": "end_at", "status": "status",
-                "number": "number"}
+                "number": "number", "dep_blocked": "dep_blocked"}
 BOOL_FIELDS = ("done", "pinned")
 
 # columns added after a table first shipped: (table, column, definition)
@@ -145,6 +163,8 @@ ADDED_COLUMNS = [
     ("tasks", "sub_seq", "INTEGER NOT NULL DEFAULT 0"),
     ("subtasks", "number", "INTEGER NOT NULL DEFAULT 0"),
     ("projects", "task_seq", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "dep_blocked", "INTEGER NOT NULL DEFAULT 0"),
+    ("projects", "task_checklist", "TEXT NOT NULL DEFAULT ''"),
 ]
 # one-time data fixes run right after a column is added to an existing table
 ON_COLUMN_ADDED = {
@@ -153,7 +173,7 @@ ON_COLUMN_ADDED = {
 
 PROJECT_STATUSES = ("planned", "active", "on_hold", "done")
 PROJECT_STATUS_NAMES = {"planned": "Planned", "active": "Active", "on_hold": "On hold", "done": "Done"}
-PROJECT_COLUMNS = ("name", "description", "color", "start_at", "end_at", "status")
+PROJECT_COLUMNS = ("name", "description", "color", "start_at", "end_at", "status", "task_checklist")
 
 # tasks with subtask progress and tracked focus time
 TASK_SELECT = ("SELECT t.*, COUNT(s.id) AS sub_total, COALESCE(SUM(s.done), 0) AS sub_done, "

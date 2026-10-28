@@ -33,7 +33,7 @@ def qdt(dt: datetime) -> QDateTime:
 
 class TaskDialog(FadeDialog):
     def __init__(self, parent, d, colors, task=None, subtasks=(), prefill=None, projects=(), project_id="",
-                 workday=TS.DEFAULT_WORKDAY, span=None):
+                 workday=TS.DEFAULT_WORKDAY, span=None, store=None):
         """d: the day a new task starts on (None: today).
         prefill: a quickparse.Parsed to start a new task from (quick capture's Ctrl+Enter).
         projects: project dicts offered in the Project field; project_id preselects one.
@@ -137,6 +137,14 @@ class TaskDialog(FadeDialog):
 
         self.subtasks = SubtaskEditor(colors, subtasks, task)
         self._task = task
+        self._store = store
+        self.waits = QLineEdit()
+        self.waits.setPlaceholderText("e.g. #3 #5: tasks in this project that must be done first")
+        self.waits.setToolTip("While any of these isn't done, this task is Blocked; it reopens\n"
+                              "automatically (with a notification) when they're all done.")
+        if task and store and task.get("project_id"):
+            self.waits.setText(" ".join(f"#{p['number']}" for p in store.prerequisites(task["id"])
+                                        if p["project_id"] == task["project_id"] and p["number"]))
         self.number_hint = set_role(QLabel(), "hint")
         self.project.currentIndexChanged.connect(self._update_number_hint)
 
@@ -166,6 +174,8 @@ class TaskDialog(FadeDialog):
         form.addRow("Priority", meta)
         form.addRow("Status", self.status)
         form.addRow("Repeat", self.repeat)
+        self._waits_label = QLabel("Waits for")
+        form.addRow(self._waits_label, self.waits)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         save = set_kind(buttons.button(QDialogButtonBox.Save), "filled")
@@ -181,6 +191,8 @@ class TaskDialog(FadeDialog):
         lay.addWidget(buttons)
         self._update_info()
         self._update_number_hint()
+        self.project.currentIndexChanged.connect(self._project_extras)
+        self._project_extras()
         self.title.setFocus()
 
     def keyPressEvent(self, e):
@@ -244,6 +256,18 @@ class TaskDialog(FadeDialog):
         self.repeat.setItemText(self.repeat.findData(R.MONTHLY), f"Monthly on the {R._ordinal(d.day)}")
 
     # ---- meta
+    def _project_extras(self, *_):
+        """Waits-for only makes sense inside a project; a new task gets the project's checklist."""
+        pid = self.project.currentData() or ""
+        self.waits.setVisible(bool(pid) and self._store is not None)
+        self._waits_label.setVisible(bool(pid) and self._store is not None)
+        if self._task is None and self._store is not None:
+            self.subtasks.set_checklist(self._store.project_checklist(pid) if pid else [])
+
+    def _waits_numbers(self):
+        import re
+        return [int(x) for x in re.findall(r"\d+", self.waits.text())]
+
     def _update_number_hint(self, *_):
         """Show the task's number in the chosen project: its own, or the one it will get."""
         pid = self.project.currentData() or ""
@@ -275,6 +299,17 @@ class TaskDialog(FadeDialog):
             QMessageBox.warning(self, "Invalid time", "The end must be after the start.")
             self.end.setFocus()
             return
+        pid = self.project.currentData() or ""
+        nums = self._waits_numbers() if pid and self._store else []
+        if nums:
+            have = {t["number"] for t in self._store.project_tasks(pid)}
+            own = self._task["number"] if self._task and self._task.get("project_id") == pid else None
+            bad = [n for n in nums if n not in have or n == own]
+            if bad:
+                QMessageBox.warning(self, "Waits for", "No such task in this project: "
+                                    + ", ".join(f"#{n}" for n in bad))
+                self.waits.setFocus()
+                return
         self.accept()
 
     def values(self):
@@ -292,4 +327,5 @@ class TaskDialog(FadeDialog):
             "pinned": self.pinned.isChecked(),
             "recurrence": self.repeat.currentData(),
             "status": self.status.currentData(),
+            "waits_for": self._waits_numbers() if (self.project.currentData() and self._store) else [],
         }

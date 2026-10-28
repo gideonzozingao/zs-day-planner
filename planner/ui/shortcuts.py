@@ -71,6 +71,7 @@ def install_shortcuts(win):
     bind(win, "Ctrl+N", lambda: win.add_task())
     bind(win, "Ctrl+Shift+N", win.new_project)
     bind(win, "Ctrl+J", lambda: win.show_projects())
+    bind(win, "Ctrl+K", win.show_palette)
     bind(win, "Ctrl+Shift+W", lambda: win.show_week())
     bind(win, "Ctrl+Shift+T", lambda: (win.show_projects(), pp.set_view("timeline")))
     wg = win.week_page.grid

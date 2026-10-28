@@ -97,6 +97,20 @@ class TaskActionsMixin:
                 self.go_to(day)
             self.refresh(select=tid)
 
+    def _apply_waits(self, tid, v):
+        """Save the task dialog's 'Waits for' (#numbers in the task's project)."""
+        t = self.store.find(tid)
+        if not t or not t["project_id"]:
+            if t:
+                self.store.set_prerequisites(tid, [])
+            return
+        by_no = {x["number"]: x["id"] for x in self.store.project_tasks(t["project_id"])}
+        ids = [by_no[n] for n in v.get("waits_for", []) if n in by_no]
+        try:
+            self.store.set_prerequisites(tid, ids)
+        except ValueError as e:
+            self.snack(f"Not saved: {e}")
+
     def add_task(self, prefill=None, span=None):
         """New task. On the projects page it goes into the open project, starting no earlier
         than the project does."""
@@ -107,13 +121,14 @@ class TaskActionsMixin:
             start_day = None if in_project else self.current
         dlg = TaskDialog(self, start_day, self.theme.c, prefill=prefill,
                          projects=self._project_choices(in_project), project_id=in_project,
-                         workday=self.store.workday(), span=span)
+                         workday=self.store.workday(), span=span, store=self.store)
         if dlg.exec():
             v = dlg.values()
             t = self.store.add(None, v["title"], note=v["note"], start_at=v["start_at"], end_at=v["end_at"],
                                subtasks=v["subtasks"], priority=v["priority"], tags=v["tags"],
                                pinned=v["pinned"], recurrence=v["recurrence"], project_id=v["project_id"],
                                status=v["status"])
+            self._apply_waits(t["id"], v)
             self._after_save(t["id"], v["date"])
 
     def edit_task(self):
@@ -121,7 +136,8 @@ class TaskActionsMixin:
         if not task:
             return
         dlg = TaskDialog(self, None, self.theme.c, task, self.store.subtasks(task["id"]),
-                         projects=self._project_choices(task["project_id"]), workday=self.store.workday())
+                         projects=self._project_choices(task["project_id"]), workday=self.store.workday(),
+                         store=self.store)
         if dlg.exec():
             v = dlg.values()
             self.store.update(task["id"], start_at=v["start_at"], end_at=v["end_at"], title=v["title"],
@@ -133,6 +149,7 @@ class TaskActionsMixin:
             self.store.set_subtasks(task["id"], v["subtasks"])
             if v["recurrence"] != task["recurrence"]:
                 self.store.set_recurrence(task["id"], v["recurrence"])
+            self._apply_waits(task["id"], v)
             self._after_save(task["id"], v["date"])
 
     def toggle_selected(self):
