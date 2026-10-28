@@ -64,11 +64,11 @@ QToolButton#railBtn { background: transparent; border: none; border-radius: 16px
 QToolButton#railBtn:hover { background: @onSurface:0.08@; }
 QToolButton#railBtn:checked { background: @secondaryContainer@; color: @onSecondaryContainer@; }
 
-QLineEdit, QDateEdit, QDateTimeEdit, QTimeEdit, QPlainTextEdit {
+QLineEdit, QDateEdit, QDateTimeEdit, QTimeEdit, QSpinBox, QPlainTextEdit {
     background: transparent; border: 1px solid @outline@; border-radius: 8px; padding: 10px 14px;
     selection-background-color: @primaryContainer@; selection-color: @onPrimaryContainer@; }
-QLineEdit:hover, QDateEdit:hover, QDateTimeEdit:hover, QTimeEdit:hover, QPlainTextEdit:hover { border-color: @onSurface@; }
-QLineEdit:focus, QDateEdit:focus, QDateTimeEdit:focus, QTimeEdit:focus, QPlainTextEdit:focus {
+QLineEdit:hover, QDateEdit:hover, QDateTimeEdit:hover, QTimeEdit:hover, QSpinBox:hover, QPlainTextEdit:hover { border-color: @onSurface@; }
+QLineEdit:focus, QDateEdit:focus, QDateTimeEdit:focus, QTimeEdit:focus, QSpinBox:focus, QPlainTextEdit:focus {
     border: 2px solid @primary@; padding: 9px 13px; }
 QLineEdit:disabled, QTimeEdit:disabled, QDateEdit:disabled, QDateTimeEdit:disabled, QComboBox:disabled {
     border-color: @outlineVariant@; color: @outline@; }

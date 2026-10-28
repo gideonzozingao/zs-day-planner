@@ -476,7 +476,7 @@ class WeekGrid(QAbstractScrollArea):
         else:
             length = d["ea"] - d["sa"]
             if d["mode"] == "chip":       # an all-day task pulled into the grid becomes a block
-                length = timedelta(minutes=DEFAULT_BLOCK)
+                length = timedelta(minutes=self.block_min)
             self._ghost = self._target(pos, length, d["offset"] if d["mode"] == "block" else 0)
         if self._ghost:
             sa, ea, allday = self._ghost
@@ -519,11 +519,13 @@ class WeekGrid(QAbstractScrollArea):
             self.selected.emit(tid or "")
 
     # ---- drops from the task list
+    block_min = DEFAULT_BLOCK
+
     def _drop_length(self, tid):
         t = self.find_task(tid)
         if t and not is_allday(t):
             return TS.to_dt(t["end_at"]) - TS.to_dt(t["start_at"])
-        return timedelta(minutes=DEFAULT_BLOCK)
+        return timedelta(minutes=self.block_min)
 
     def find_task(self, tid):
         return self._lookup(tid) if self._lookup else None
@@ -563,8 +565,7 @@ class WeekPage(QWidget):
     def __init__(self, host):
         super().__init__()
         self.host, self.store = host, host.store
-        monday = date.today() - timedelta(days=date.today().weekday())
-        self.week_start = monday
+        self.week_start = self.store.week_start_of(date.today())
         self.seven = self.store.settings.get("week_days", 7) != 5
 
         v = QVBoxLayout(self)
@@ -657,14 +658,17 @@ class WeekPage(QWidget):
     # ---- navigation
     @property
     def days(self):
-        return [self.week_start + timedelta(days=i) for i in range(7 if self.seven else 5)]
+        if self.seven:
+            return [self.week_start + timedelta(days=i) for i in range(7)]
+        monday = self.week_start + timedelta(days=(7 - self.week_start.weekday()) % 7)
+        return [monday + timedelta(days=i) for i in range(5)]       # work week: Mon–Fri
 
     def shift(self, n):
         self.week_start += timedelta(days=n)
         self.refresh()
 
     def this_week(self):
-        self.week_start = date.today() - timedelta(days=date.today().weekday())
+        self.week_start = self.store.week_start_of(date.today())
         self.refresh()
         self.grid.scroll_to_hour(max(0, datetime.now().hour - 2))
 
@@ -690,6 +694,7 @@ class WeekPage(QWidget):
             b.setChecked((n == 7) == self.seven)
         projects = {p["id"]: p for p in self.store.projects()}
         tasks = self.store.for_range(d0, d1)
+        self.grid.block_min = int(self.store.settings.get("block_minutes", DEFAULT_BLOCK) or DEFAULT_BLOCK)
         self.grid.set_week(days, tasks, projects, self.host.theme.c, self.store.workday(),
                            select=select)
         self._fill_projects(projects)
@@ -762,7 +767,7 @@ class WeekPage(QWidget):
         self.host.edit_task()
 
     def _create_at(self, sa):
-        self.host.add_task(span=(sa, sa + timedelta(minutes=DEFAULT_BLOCK)))
+        self.host.add_task(span=(sa, sa + timedelta(minutes=self.grid.block_min)))
 
     def _menu(self, tid, pos):
         self._pool_sel = None

@@ -20,6 +20,17 @@ DEFAULT_SETTINGS = {
     "review_time": "",               # "HH:MM"; empty = start of the routine's Wrap-up block
     "review_last": "",               # date of the last completed review
     "capture_hotkey": "Ctrl+Alt+Space",
+    # ---- Settings page
+    "workday_start": "",             # "HH:MM"; empty = start of the routine's first block
+    "workday_end": "",               # "HH:MM"; empty = end of the routine's last block
+    "block_minutes": 60,             # length of a new time block (week planner, new tasks)
+    "week_start": 0,                 # 0 = Monday, 6 = Sunday
+    "notify_style": "popup",         # "popup" | "toast" | "both" | "off"
+    "notify_hourly": True,           # hourly check-in (skipped while focusing)
+    "notify_lead_min": 0,            # remind this many minutes before a task starts
+    "backup_auto": True,             # a copy of the database once a day
+    "backup_dir": "",                # empty = DATA_DIR/backups
+    "backup_keep": 14,               # how many backups to keep (0 = all)
 }
 
 DEFAULT_ROUTINE = [
@@ -91,6 +102,7 @@ SHORTCUT_HELP = [
         ("Ctrl+E", "End-of-day review"),
         ("Ctrl+Shift+S", "Statistics"),
         ("Ctrl+Shift+W", "Week planner (Alt+←/→ changes week)"),
+        ("Ctrl+Alt+S", "Settings"),
         ("Ctrl+L", "Focus quick add"),
         ("Ctrl+,", "Theme drawer"),
         ("Ctrl+R", "Show reminder now"),

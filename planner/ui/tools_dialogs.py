@@ -212,7 +212,7 @@ class ExportCalendarDialog(FadeDialog):
         self._update()
 
     def tasks(self):
-        week0 = date.today() - timedelta(days=date.today().weekday())
+        week0 = self.store.week_start_of(date.today())
         d0 = week0 if self.range.currentData() == 7 else date.today()
         d1 = d0 + timedelta(days=self.range.currentData() - 1)
         rows = self.store.for_range(d0, d1)
