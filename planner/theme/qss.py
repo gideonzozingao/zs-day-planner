@@ -117,6 +117,15 @@ QListWidget#projectList::item { border-radius: 16px; margin: 0 0 6px 0; backgrou
 QListWidget#projectList::item:hover { background: @surfaceContainer@; }
 QListWidget#projectList::item:selected { background: @secondaryContainer@; }
 QSplitter::handle { background: transparent; }
+QScrollArea#kanban, QWidget#kanbanInner { background: transparent; border: none; }
+QFrame#kanbanColumn { background: @surfaceContainer@; border-radius: 16px; border: 2px solid transparent; }
+QFrame#kanbanColumn[dropTarget="true"] { border: 2px dashed @primary@; background: @primary:0.08@; }
+QFrame#kanbanCard { background: @surface@; border: 1px solid @outlineVariant@; border-radius: 12px; }
+QFrame#kanbanCard:hover { border-color: @outline@; }
+QFrame#kanbanCard[late="true"] { border-left: 4px solid @error@; }
+QFrame#kanbanCard[selected="true"] { border: 2px solid @primary@; }
+QFrame#kanbanCard[dragging="true"] { background: @surfaceContainerHigh@; border: 1px dashed @outline@; }
+QFrame#kanbanCard QLabel { background: transparent; }
 QHeaderView { background: transparent; }
 QHeaderView::section { text-align: left; background: transparent; color: @onSurfaceVariant@; border: none;
     border-bottom: 1px solid @outlineVariant@; padding: 10px 8px; font-weight: 600; }

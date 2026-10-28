@@ -947,6 +947,29 @@ class Store:
                                 [(pos, x) for pos, x in enumerate(ids)])
         return True
 
+    def project_order(self, pid):
+        return [x["id"] for x in self.project_tasks(pid)]
+
+    def set_project_order(self, pid, ids):
+        with self.db:
+            self.db.executemany("UPDATE tasks SET project_pos = ? WHERE id = ? AND project_id = ?",
+                                [(pos, x, pid) for pos, x in enumerate(ids)])
+
+    def place_in_project(self, tid, before_id="", after_id=""):
+        """Move a task within its project's order: just above `before_id`, else just below
+        `after_id`, else leave it where it is. Used by the Kanban board."""
+        t = self.find(tid)
+        if not t or not t["project_id"] or not (before_id or after_id):
+            return
+        ids = [x for x in self.project_order(t["project_id"]) if x != tid]
+        if before_id in ids:
+            ids.insert(ids.index(before_id), tid)
+        elif after_id in ids:
+            ids.insert(ids.index(after_id) + 1, tid)
+        else:
+            return
+        self.set_project_order(t["project_id"], ids)
+
     def add_subtask(self, tid, title) -> str:
         n = self.db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM subtasks WHERE task_id = ?",
                             (tid,)).fetchone()[0]

@@ -3,11 +3,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 
 
-def bind(owner, keys, slot, widget=None):
-    """Window-wide shortcut, or one that only fires while `widget` has focus."""
+def bind(owner, keys, slot, widget=None, children=False):
+    """Window-wide shortcut, or one that only fires while `widget` (or, with children=True,
+    any widget inside it, e.g. a focused Kanban card) has focus."""
     for k in (keys if isinstance(keys, (list, tuple)) else [keys]):
         s = QShortcut(QKeySequence(k), widget or owner)
-        s.setContext(Qt.WidgetShortcut if widget else Qt.WindowShortcut)
+        if widget:
+            s.setContext(Qt.WidgetWithChildrenShortcut if children else Qt.WidgetShortcut)
+        else:
+            s.setContext(Qt.WindowShortcut)
         s.activated.connect(slot)
 
 
@@ -38,7 +42,22 @@ def install_shortcuts(win):
     bind(win, "Ctrl+H", win.show_history, tr)
     bind(win, "Ctrl+B", win.toggle_star, tr)
     bind(win, "Ctrl+I", win.cycle_status, tr)
+    # Kanban board: the same task keys while a card has focus, plus moving between columns
+    bd = pp.board
+    bind(win, "Delete", pp.delete_current, bd, True)
+    bind(win, ["F2", "Return", "Enter"], pp.edit_current, bd, True)
+    bind(win, "Space", pp.toggle_current, bd, True)
+    bind(win, "Insert", pp.add_subtask, bd, True)
+    bind(win, "Ctrl+Shift+Left", lambda: pp.move_card(-1), bd, True)
+    bind(win, "Ctrl+Shift+Right", lambda: pp.move_card(1), bd, True)
+    bind(win, "Ctrl+D", win.duplicate_task, bd, True)
+    bind(win, "Ctrl+C", win.copy_task, bd, True)
+    bind(win, "Ctrl+H", win.show_history, bd, True)
+    bind(win, "Ctrl+B", win.toggle_star, bd, True)
+    bind(win, "Ctrl+I", win.cycle_status, bd, True)
     # window-level
+    bind(win, "Ctrl+Shift+K", lambda: (win.show_projects(), pp.set_view("board")))
+    bind(win, "Ctrl+Shift+L", lambda: (win.show_projects(), pp.set_view("list")))
     bind(win, "Ctrl+N", lambda: win.add_task())
     bind(win, "Ctrl+Shift+N", win.new_project)
     bind(win, "Ctrl+J", lambda: win.show_projects())

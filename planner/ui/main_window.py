@@ -339,8 +339,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             self.projects_page.show_project(project_id, select_task=select)
         else:
             self.projects_page.refresh(select=select)
-        if self.projects_page.tree.isVisible():
-            self.projects_page.tree.setFocus()
+        self.projects_page.focus_tasks()
 
     def show_day(self, d=None, select=None):
         self.btn_projects.setChecked(False)

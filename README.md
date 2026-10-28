@@ -41,6 +41,14 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   chip bar, or right-click a tag chip → *Convert #tag to a project*.
   Keys in the project tree: `Insert` add subtask, `Space` toggle, `Enter` edit/rename,
   `Alt+↑/↓` reorder, `Delete` delete (undoable), `Ctrl+Shift+N` new project.
+- **Kanban board** for project tasks: switch a project between **List** and **Board**
+  (`Ctrl+Shift+L` / `Ctrl+Shift+K`; the choice is remembered). The board has one column per
+  status; drag a card to another column to change its status, or up/down to change its
+  place in the project order (a line shows where it will land; the board scrolls at the
+  edges). Every move is undoable (`Ctrl+Z`). Cards show the task number, title, dates (red
+  when overdue), subtask progress, tags and focus time. Keyboard: `Ctrl+Shift+←/→` moves the
+  selected card to the previous/next column; Space, Enter, Delete, Insert, `Ctrl+I` work as
+  in the list. *Hide completed* hides the Done and Cancelled columns.
 - **Automatic numbering**: tasks in a project are numbered `#1`, `#2`, … as they're created
   (shown before the title everywhere: project tree, day view, reminders, copy text), and every
   task's subtasks are numbered as they're added, shown as `9.1`, `9.2` under task `#9`.

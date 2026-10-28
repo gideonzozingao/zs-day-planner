@@ -1,6 +1,6 @@
 """Self-update: check the update feed, download + verify the installer, install silently.
 
-Feed: https://github.com/gideonzozingao/zs-day-planner/releases/download/update-feed/<channel>.json, a manifest
+Feed: https://github.com/<repo>/releases/download/update-feed/<channel>.json, a manifest
 published by CI (scripts/make_manifest.py). Plain release downloads are not subject to
 GitHub's 60-requests/hour API limit, which matters when many PCs share one office IP.
 If the feed doesn't exist yet, the GitHub Releases API is used as a fallback.
@@ -62,6 +62,10 @@ class UpdateManager(QObject):
         req.setRawHeader(b"Accept", accept)
         req.setAttribute(QNetworkRequest.RedirectPolicyAttribute,
                          QNetworkRequest.NoLessSafeRedirectPolicy)   # GitHub assets redirect to a CDN
+        # Plain HTTP/1.1: Qt negotiates HTTP/2 by default, and some office proxies / firewalls
+        # (TLS inspection) break HTTP/2 streams, which shows up as "HTTP/2 protocol error".
+        # The feed is tiny and the installer is one file, so HTTP/2 gains nothing here.
+        req.setAttribute(QNetworkRequest.Http2AllowedAttribute, False)
         req.setTransferTimeout(30_000)
         return req
 
@@ -82,7 +86,8 @@ class UpdateManager(QObject):
         if reply.error() == QNetworkReply.ContentNotFoundError:
             return self._check_api(manual, channel)          # feed not published yet
         if reply.error() != QNetworkReply.NoError:
-            return self._check_failed(reply.errorString(), manual)
+            self._feed_error = reply.errorString()
+            return self._check_api(manual, channel)          # feed unreachable: try the API
         try:
             manifest = json.loads(bytes(reply.readAll()).decode("utf-8"))
             info = manifest_to_info(manifest, __version__)
@@ -98,9 +103,16 @@ class UpdateManager(QObject):
         reply.deleteLater()
         if reply.error() != QNetworkReply.NoError:
             status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
-            msg = {404: "No releases found (check UPDATE_REPO and that the repository is public)",
+            # GitHub answers 404 for a repository that doesn't exist *or* is private; a public
+            # repository with no releases returns an empty list instead (handled below)
+            msg = {404: f"GitHub repository {UPDATE_REPO} wasn't found. Check UPDATE_REPO in "
+                        f"planner/config.py matches the repository name, and that it's public",
                    403: "GitHub is rate-limiting this network; will retry later"}.get(status, reply.errorString())
+            feed_err, self._feed_error = getattr(self, "_feed_error", None), None
+            if feed_err and status != 404:
+                msg = f"{feed_err} (GitHub API: {msg})"
             return self._check_failed(msg, manual)
+        self._feed_error = None
         try:
             releases = json.loads(bytes(reply.readAll()).decode("utf-8"))
         except ValueError:

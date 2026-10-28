@@ -22,6 +22,7 @@ from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from ..theme.icons import status_dot
+from .kanban import KanbanBoard
 from .stats_dialog import StatusBar
 from ..utils import fmt_duration, rgba
 from .dialogs import DatePickerDialog
@@ -275,6 +276,20 @@ class ProjectsPage(QWidget):
         self.hide_done.toggled.connect(lambda *_: self.refresh())
         add_row.addSpacing(8)
         add_row.addWidget(self.hide_done)
+        add_row.addSpacing(12)
+        self.view_btns = {}
+        for key, label, tip in (("list", "List", "Tasks and subtasks as a tree (Ctrl+Shift+L)"),
+                                ("board", "Board", "Kanban board: drag tasks between statuses (Ctrl+Shift+K)")):
+            b = set_kind(QPushButton(label), "chip")
+            b.setCheckable(True)
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self.set_view(k))
+            self.view_btns[key] = b
+            add_row.addWidget(b)
+        self.view = self.store.settings.get("project_view", "list")
+        if self.view not in self.view_btns:
+            self.view = "list"
         lay.addLayout(add_row)
         self.quick_hint = set_role(QLabel(), "hint")
         self.quick_hint.setContentsMargins(14, 0, 0, 0)
@@ -308,6 +323,11 @@ class ProjectsPage(QWidget):
         self.tree = t
         self._collapsed = set()
         lay.addWidget(t, 1)
+        self.board = KanbanBoard(focus_check=lambda tid: self.host.app.focus.is_on(tid))
+        self.board.moved.connect(self._board_moved)
+        self.board.activated.connect(lambda tid: self.host.edit_task())
+        self.board.menuRequested.connect(lambda tid, pos: self._tree_menu(pos, None))
+        lay.addWidget(self.board, 1)
         self.tree_empty = set_role(QLabel("No tasks yet. Type one above and press Enter,\n"
                                           "or press Ctrl+N to set its start and end."), "muted")
         self.tree_empty.setAlignment(Qt.AlignCenter)
@@ -327,7 +347,11 @@ class ProjectsPage(QWidget):
         self.refresh(select=select_task)
 
     def selected(self):
-        """-> (kind, task_id, subtask_id) for the tree's current row, or (None, None, None)."""
+        """-> (kind, task_id, subtask_id) for the selected tree row or board card,
+        or (None, None, None)."""
+        if self.view == "board":
+            tid = self.board.selected_id
+            return (TASK, tid, None) if tid else (None, None, None)
         it = self.tree.currentItem()
         data = it.data(0, Qt.UserRole) if it else None
         if not data:
@@ -339,6 +363,23 @@ class ProjectsPage(QWidget):
 
     def show_stats(self):
         self.host.app.show_stats(project_id=self.current_id)
+
+    def set_view(self, key):
+        """Switch the project's tasks between the tree (list) and the Kanban board."""
+        if key not in self.view_btns:
+            return
+        sel = self.selected_task_id()
+        self.view = key
+        self.store.settings["project_view"] = key
+        self.store.save_settings()
+        self.refresh(select=sel)
+        (self.board.focus_selected if key == "board" else self.tree.setFocus)()
+
+    def focus_tasks(self):
+        if self.view == "board":
+            self.board.focus_selected()
+        else:
+            self.tree.setFocus()
 
     def set_filter(self, key):
         self.filter = key
@@ -353,6 +394,8 @@ class ProjectsPage(QWidget):
         self.sub_lbl.setText(f"{n_open} open · {n_done} done" if all_projects else "Group tasks into projects")
         for key, b in self.filter_btns.items():
             b.setChecked(key == self.filter)
+        for key, b in self.view_btns.items():
+            b.setChecked(key == self.view)
         shown = [p for p in all_projects
                  if self.filter == "all" or (p["status"] == "done") == (self.filter == "done")]
 
@@ -432,7 +475,58 @@ class ProjectsPage(QWidget):
             f"<span style='color:{STATUS.color(st)}'>●</span> {counts[st]} {STATUS.label(st).lower()}"
             for st in STATUS.ORDER if counts[st]) or "No tasks yet")
 
+    def _fill_board(self, p, select):
+        tasks = self.store.project_tasks(p["id"])
+        self.board.set_tasks(tasks, self.host.theme.c, hide_done=self.hide_done.isChecked(),
+                             select=select or self.board.selected_id)
+        self.tree.hide()
+        self.board.setVisible(bool(tasks))
+        self.tree_empty.setVisible(not tasks)
+        self.tree_empty.setText("No tasks yet. Type one above and press Enter,\n"
+                                "or press Ctrl+N to set its start and end.")
+
+    def _board_moved(self, tid, status, before):
+        """A card was dropped: change its status and/or its place in the project order."""
+        task = self.store.find(tid)
+        if not task:
+            return
+        old_status = task["status"]
+        old_order = self.store.project_order(task["project_id"])
+        col = self.board.columns.get(status)
+        others = [c.tid for c in col.cards if c.tid != tid] if col else []
+        if before:
+            self.store.place_in_project(tid, before_id=before)
+        elif others:
+            self.store.place_in_project(tid, after_id=others[-1])
+        if status != old_status:
+            self.store.set_status(tid, status)
+        new_order = self.store.project_order(task["project_id"])
+        if status == old_status and new_order == old_order:
+            return
+
+        def undo(pid=task["project_id"]):
+            self.store.set_status(tid, old_status)
+            self.store.set_project_order(pid, old_order)
+            return tid
+        self.host._push_undo("move", undo)
+        self.refresh(select=tid)
+        self.board.focus_selected()
+        if status != old_status:
+            self.host.snack(f"{NUM.titled(task)[:40]} → {STATUS.label(status)}", "Undo", self.host.undo)
+            self.host.task_done_changed(tid)
+
+    def move_card(self, delta):
+        """Keyboard alternative to dragging: move the selected card one column left/right."""
+        if self.view != "board" or not self.board.selected_id:
+            return
+        st = self.board.neighbour_status(self.board.selected_id, delta)
+        if st:
+            self._board_moved(self.board.selected_id, st, "")
+
     def _fill_tree(self, p, now, select):
+        if self.view == "board":
+            return self._fill_board(p, select)
+        self.board.hide()
         c = self.host.theme.c
         keep = select or self.selected_task_id()
         keep_sub = None if select else self.selected()[2]
@@ -515,6 +609,7 @@ class ProjectsPage(QWidget):
         t.blockSignals(False)
         t.setVisible(bool(tasks))
         self.tree_empty.setVisible(not tasks)
+
         if not tasks and self.hide_done.isChecked() and self.store.project_tasks(p["id"]):
             self.tree_empty.setText("Every task in this project is done.")
         else:
@@ -769,9 +864,11 @@ class ProjectsPage(QWidget):
             task = self.store.find(tid)
             snapshot = self.store.delete(tid)
             self.host._push_undo("delete", lambda t=snapshot: (self.store.restore(t), t["id"])[1])
+            if self.view == "board":
+                self.board.selected_id = None
             self.refresh()
             n = self.tree.topLevelItemCount()
-            if n:
+            if n and self.view != "board":
                 self.tree.setCurrentItem(self.tree.topLevelItem(min(max(row, 0), n - 1)))
             self.host.snack(f"Deleted “{task['title']}”", "Undo", self.host.undo)
 
@@ -861,9 +958,19 @@ class ProjectsPage(QWidget):
             h._menu_action(mv, "Remove from project", lambda: self.move_to_project(""))
             up = add("Move up", lambda: self.move_current(-1), "arrow_up", "Alt+↑")
             down = add("Move down", lambda: self.move_current(1), "arrow_down", "Alt+↓")
-            idx = self.tree.indexOfTopLevelItem(self.tree.currentItem())
+            order = self.store.project_order(task["project_id"])
+            idx = order.index(task["id"]) if task["id"] in order else -1
             up.setEnabled(idx > 0)
-            down.setEnabled(0 <= idx < self.tree.topLevelItemCount() - 1)
+            down.setEnabled(0 <= idx < len(order) - 1)
+            if self.view == "board":
+                left = self.board.neighbour_status(task["id"], -1)
+                right = self.board.neighbour_status(task["id"], 1)
+                a = add(f"Move to {STATUS.label(left)}" if left else "Move left", lambda: self.move_card(-1),
+                        None, "Ctrl+Shift+←")
+                a.setEnabled(bool(left))
+                a = add(f"Move to {STATUS.label(right)}" if right else "Move right", lambda: self.move_card(1),
+                        None, "Ctrl+Shift+→")
+                a.setEnabled(bool(right))
             add("Duplicate", h.duplicate_task, "add", "Ctrl+D")
             add("Copy text", h.copy_task, "copy", "Ctrl+C")
             add("History…", h.show_history, "history", "Ctrl+H")
