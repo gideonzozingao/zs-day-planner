@@ -117,6 +117,9 @@ QListWidget#projectList::item { border-radius: 16px; margin: 0 0 6px 0; backgrou
 QListWidget#projectList::item:hover { background: @surfaceContainer@; }
 QListWidget#projectList::item:selected { background: @secondaryContainer@; }
 QSplitter::handle { background: transparent; }
+QFrame#depRow { background: @surfaceContainer@; border-radius: 8px; }
+QFrame#depRow QPushButton { border: none; border-radius: 13px; color: @onSurfaceVariant@; padding: 0; min-height: 0; min-width: 0; font-size: 14px; }
+QFrame#depRow QPushButton:hover { background: @onSurface:0.08@; color: @error@; }
 QListWidget#taskPool { background: transparent; border: none; outline: 0; }
 QListWidget#taskPool::item { background: @surface@; border: 1px solid @outlineVariant@; border-radius: 10px;
     padding: 8px 8px; margin: 0 0 6px 0; color: @onSurface@; }
