@@ -17,6 +17,7 @@ from .. import autostart
 from ..config import DATA_DIR
 from ..data import backup as B
 from .helpers import set_kind, set_role
+from .theme_panel import ThemePanel
 
 BLOCKS = (15, 30, 45, 60, 90, 120)
 LEADS = ((0, "When it starts"), (5, "5 minutes before"), (10, "10 minutes before"), (15, "15 minutes before"),
@@ -56,7 +57,10 @@ class SettingsPage(QWidget):
         self.v.setSpacing(14)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
+        self._scroll = scroll
 
+        self._sections = {}
+        self._appearance()
         self._hours()
         self._planning()
         self._reminders()
@@ -99,7 +103,21 @@ class SettingsPage(QWidget):
             after()
         self.host.refresh()
 
+    def scroll_to(self, section):
+        card = self._sections.get(section)
+        if card is not None:
+            self._scroll.ensureWidgetVisible(card, 0, 0)
+            self._scroll.verticalScrollBar().setValue(card.y())
+
     # ---- sections
+    def _appearance(self):
+        lay = self._card("Appearance", "Light or dark, the colour everything is built from, and the "
+                                       "colour style. Ctrl+, opens this section.")
+        self._sections["appearance"] = lay.parentWidget()
+        self.theme_panel = ThemePanel(self.host.theme)
+        self.theme_panel.themeRequested.connect(lambda kw: self.host.change_theme(**kw))
+        lay.addWidget(self.theme_panel)
+
     def _hours(self):
         lay = self._card("Working hours", "Tasks added without a time get this working day. It's also the "
                                           "week planner's shaded hours and the “Work day” button.")
@@ -376,7 +394,6 @@ class SettingsPage(QWidget):
         lay = self._card("More")
         row = QHBoxLayout()
         for label, fn in (("Updates…", lambda: self.host.app.show_updates()),
-                          ("Theme…", self.host.toggle_drawer),
                           ("Keyboard shortcuts", self.host.show_shortcuts),
                           ("Open data folder", lambda: self._open_folder(DATA_DIR))):
             b = set_kind(QPushButton(label), "chip")

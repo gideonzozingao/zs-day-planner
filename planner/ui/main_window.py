@@ -1,4 +1,4 @@
-"""Main window: navigation rail, day view (task table) or projects page, theme drawer."""
+"""Main window: navigation rail and the pages (day, week, projects, settings)."""
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QDate, QSize, Qt, QTimer
@@ -28,7 +28,6 @@ from .week import WeekPage
 from .shortcuts import install_shortcuts
 from .snackbar import Snackbar
 from .task_actions import TaskActionsMixin
-from .theme_drawer import ThemeDrawer
 
 
 class MainWindow(QMainWindow, TaskActionsMixin):
@@ -60,10 +59,6 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self.settings_page = SettingsPage(self)
         self.stack.addWidget(self.settings_page)
         h.addWidget(self.stack, 1)
-        self.drawer = ThemeDrawer(self.theme)
-        self.drawer.themeRequested.connect(lambda kw: self.change_theme(**kw))
-        self.drawer.closeRequested.connect(self.toggle_drawer)
-        h.addWidget(self.drawer)
         self.setCentralWidget(self.root)
         self.snackbar = Snackbar(self.root)
         install_shortcuts(self)
@@ -112,11 +107,10 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         self.btn_review.setCheckable(False)
         self.btn_stats = rb("Stats", "chart", self.show_stats, "Ctrl+Shift+S")
         self.btn_stats.setCheckable(False)
-        self.btn_theme = rb("Theme", "palette", self.toggle_drawer, "Ctrl+,")
         lay.addStretch()
         self.btn_settings = rb("Settings", "settings", lambda: self.show_settings(), "Ctrl+Alt+S")
         self.rail_buttons = [self.btn_today, self.btn_plan, self.btn_week, self.btn_projects, self.btn_review,
-                             self.btn_stats, self.btn_theme, self.btn_settings]
+                             self.btn_stats, self.btn_settings]
         return self.rail
 
     def _build_header(self):
@@ -270,15 +264,14 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         c = self.theme.c
         for w, name, off, on in self._icons:
             w.setIcon(make_icon(name, c[off], c[on] if on else None))
-        self.drawer.sync()
+        self.settings_page.theme_panel.sync()
         self.focus_bar.retheme(c)
         self.setWindowIcon(app_icon(c))
         self.refresh()
 
     def toggle_drawer(self):
-        opening = not self.drawer.is_open
-        self.drawer.set_open(opening)
-        self.btn_theme.setChecked(opening)
+        """Theme lives in Settings now (Ctrl+, opens it at Appearance)."""
+        self.show_settings(section="appearance")
 
     # ------------------------------------------------------------------ window events
     def _set_compact(self, compact):
@@ -308,9 +301,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
                                       QSystemTrayIcon.Information, 2000)
 
     def on_escape(self):
-        if self.drawer.is_open:
-            self.toggle_drawer()
-        elif self.snackbar.isVisible():
+        if self.snackbar.isVisible():
             self.snackbar.dismiss()
         elif self.quick.hasFocus() and self.quick.text():
             self.quick.clear()
@@ -338,10 +329,12 @@ class MainWindow(QMainWindow, TaskActionsMixin):
     def on_settings(self):
         return self.stack.currentWidget() is self.settings_page
 
-    def show_settings(self):
+    def show_settings(self, section=None):
         self._switch(self.settings_page)
         self._rail_check(self.btn_settings)
         self.settings_page.refresh()
+        if section:
+            self.settings_page.scroll_to(section)
 
     def _rail_check(self, active):
         for b in (self.btn_today, self.btn_plan, self.btn_week, self.btn_projects, self.btn_settings):
@@ -456,7 +449,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             ("Export to calendar (.ics)…", "", "event", lambda: self.export_calendar(
                 pp.current_id if self.on_projects() else None)),
             ("Quick add", "Ctrl+L", "add", self.focus_quick),
-            ("Theme", "Ctrl+,", "palette", self.toggle_drawer),
+            ("Theme / appearance", "Ctrl+,", "palette", self.toggle_drawer),
             ("Settings", "Ctrl+Alt+S", "settings", self.show_settings),
             ("Back up now", "", "settings", lambda: (self.store.backup_now(), self.snack("Backed up"))),
             ("Keyboard shortcuts", "F1", None, self.show_shortcuts),
