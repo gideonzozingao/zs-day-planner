@@ -24,7 +24,6 @@ QLabel[role="kbd"] { background: @surfaceContainerHighest@; color: @onSurface@; 
 QLabel#iconCircle { background: @primaryContainer@; border-radius: 20px; }
 QFrame#rail { background: @surface@; }
 QFrame#panel { background: @surfaceContainerLow@; border-radius: 24px; }
-QFrame#drawer { background: @surfaceContainer@; border-top-left-radius: 28px; border-bottom-left-radius: 28px; }
 QFrame#popupCard { background: @surfaceContainerHigh@; border-radius: 28px; }
 QFrame#snackbar { background: @inverseSurface@; border-radius: 8px; }
 QFrame#snackbar QLabel { color: @inverseOnSurface@; }

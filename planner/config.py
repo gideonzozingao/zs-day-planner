@@ -104,7 +104,7 @@ SHORTCUT_HELP = [
         ("Ctrl+Shift+W", "Week planner (Alt+←/→ changes week)"),
         ("Ctrl+Alt+S", "Settings"),
         ("Ctrl+L", "Focus quick add"),
-        ("Ctrl+,", "Theme drawer"),
+        ("Ctrl+,", "Appearance (in Settings)"),
         ("Ctrl+R", "Show reminder now"),
         ("Esc", "Close drawer / clear"),
         ("Ctrl+W / Ctrl+Q", "Hide to tray / quit"),
