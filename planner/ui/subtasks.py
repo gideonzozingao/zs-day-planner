@@ -208,6 +208,21 @@ class SubtaskEditor(QFrame):
         self.changed.emit()
 
     # ---- public
+    def set_checklist(self, titles):
+        """Fill a new task's list from its project's checklist. Replaces a previous checklist
+        fill only if the user hasn't changed it, and never touches rows they typed."""
+        current = [r.value()["title"] for r in self._rows()]
+        auto = getattr(self, "_auto", [])
+        if current and current != auto:
+            return
+        for r in self._rows():
+            self.rows.removeWidget(r)
+            r.deleteLater()
+        for t in titles:
+            self._append({"title": t, "done": False}, update=False)
+        self._auto = list(titles)
+        self._update()
+
     def values(self):
         """[{id|None, title, done}] in display order, empty titles dropped."""
         out = [r.value() for r in self._rows()]

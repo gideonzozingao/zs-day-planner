@@ -47,6 +47,7 @@ class GanttView(QAbstractScrollArea):
         self.viewport().setMouseTracking(True)
         self.zoom = 3
         self.tasks, self.project, self.c = [], None, {}
+        self.deps = {}
         self.t0 = self.t1 = datetime.now()
         self.selected_id = None
         self._drag = None          # dict(tid, mode, x0, sa, ea)
@@ -59,8 +60,9 @@ class GanttView(QAbstractScrollArea):
     def ppd(self):
         return ZOOMS[self.zoom]
 
-    def set_tasks(self, project, tasks, colors, select=None):
+    def set_tasks(self, project, tasks, colors, select=None, deps=None):
         self.project, self.tasks, self.c = project, tasks, colors
+        self.deps = deps or {}
         starts = [TS.to_dt(t["start_at"]) for t in tasks] + [TS.to_dt(project["start_at"]), datetime.now()]
         ends = [TS.to_dt(t["end_at"]) for t in tasks] + [TS.to_dt(project["end_at"]), datetime.now()]
         self.t0 = _floor_day(min(starts)) - timedelta(days=3)
@@ -306,6 +308,34 @@ class GanttView(QAbstractScrollArea):
             else:
                 p.drawText(QRectF(r.right() + 6, r.top(), 360, r.height()), Qt.AlignVCenter | Qt.AlignLeft,
                            fm.elidedText(label, Qt.ElideRight, 360))
+
+        # dependency arrows: from the end of a prerequisite to the start of the task waiting for it
+        row_of = {t["id"]: i for i, t in enumerate(self.tasks)}
+        for tid, pres in self.deps.items():
+            if tid not in row_of:
+                continue
+            j = row_of[tid]
+            rj = self.bar_rect(j, self.tasks[j])
+            for pid in pres:
+                if pid not in row_of:
+                    continue
+                i = row_of[pid]
+                ri = self.bar_rect(i, self.tasks[i])
+                pre_open = self.tasks[i]["status"] not in (STATUS.DONE, STATUS.CANCELLED)
+                late = TS.to_str(self.span(self.tasks[i])[1]) > TS.to_str(self.span(self.tasks[j])[0])
+                col = QColor(error if (late and pre_open) else muted)
+                p.setPen(QPen(col, 1.4))
+                p.setBrush(Qt.NoBrush)
+                x1, y1 = ri.right(), ri.center().y()
+                x2, y2 = rj.left(), rj.center().y()
+                mid = max(x1 + 8, min(x2 - 8, x1 + 12))
+                path = QPainterPath(QPointF(x1, y1))
+                path.lineTo(mid, y1)
+                path.lineTo(mid, y2)
+                path.lineTo(x2 - 1, y2)
+                p.drawPath(path)
+                p.setBrush(col)
+                p.drawPolygon([QPointF(x2, y2), QPointF(x2 - 6, y2 - 3.5), QPointF(x2 - 6, y2 + 3.5)])
 
         # today line
         xt = self.x_of(now)

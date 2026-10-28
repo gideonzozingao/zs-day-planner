@@ -1,7 +1,7 @@
 """App-wide constants, paths and defaults."""
 from pathlib import Path
 
-APP_NAME = "Zuqongsoft Day Planner"
+APP_NAME = "Zuqongtech Daily Planner"
 LOOKAHEAD_MIN = 180              # reminder popup looks this far ahead
 REMINDER_TICK_MS = 15_000        # how often the reminder timer checks
 
@@ -63,6 +63,10 @@ SHORTCUT_HELP = [
         ("Ctrl+I", "Cycle status (open/in progress/done)"),
         ("Ctrl+Z", "Undo"),
         ("Right-click", "Task actions, repeat, subtasks, project"),
+    ]),
+    ("COMMAND PALETTE", [
+        ("Ctrl+K", "Find any task / project / action"),
+        ("#9 done · focus #9 · edit #9", "Commands in the palette"),
     ]),
     ("PROJECTS", [
         ("Ctrl+J", "Projects page"),

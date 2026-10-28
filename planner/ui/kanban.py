@@ -32,7 +32,7 @@ COLUMN_W = 248
 
 
 class Card(QFrame):
-    def __init__(self, board, task, now_s, colors):
+    def __init__(self, board, task, now_s, colors, waits=None):
         super().__init__()
         self.board, self.task = board, task
         self.tid = task["id"]
@@ -74,6 +74,13 @@ class Card(QFrame):
             title.setStyleSheet(f"color:{colors['onSurfaceVariant']};")
         v.addWidget(title)
 
+        if waits:
+            open_w = [w for w in waits if w["status"] not in (STATUS.DONE, STATUS.CANCELLED)]
+            txt = ("⛓ waits for " if open_w else "✓ was waiting for ") + " ".join(
+                NUM.task_no(w) or w["title"][:12] for w in waits)
+            wl = set_role(QLabel(txt), "danger" if open_w else "hint")
+            wl.setWordWrap(True)
+            v.addWidget(wl)
         when = QLabel(TS.span_label(task["start_at"], task["end_at"]))
         set_role(when, "danger" if late else "hint")
         v.addWidget(when)
@@ -299,7 +306,7 @@ class KanbanBoard(QScrollArea):
     def app_focus(self, tid):
         return self._focus_check(tid)
 
-    def set_tasks(self, tasks, colors, hide_done=False, select=None):
+    def set_tasks(self, tasks, colors, hide_done=False, select=None, deps=None):
         """Rebuild the board. Order within a column follows the project order."""
         keep_scroll = (self.horizontalScrollBar().value(), self.verticalScrollBar().value())
         while self.row.count():
@@ -315,7 +322,9 @@ class KanbanBoard(QScrollArea):
             by_status[t["status"]].append(t)
         for st in statuses:
             col = Column(self, st, STATUS.color(st))
-            cards = [Card(self, t, now_s, colors) for t in by_status[st]]
+            by_id = {t["id"]: t for t in tasks}
+            cards = [Card(self, t, now_s, colors, [by_id[x] for x in (deps or {}).get(t["id"], []) if x in by_id])
+                     for t in by_status[st]]
             for c in cards:
                 self.cards[c.tid] = c
             col.set_cards(cards)

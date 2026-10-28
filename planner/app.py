@@ -96,6 +96,7 @@ class PlannerApp:
         self.tray.show()
 
         self.window = MainWindow(self.store, self)
+        self.store.on_unblocked = self._on_unblocked
         if not start_hidden:
             self.window.show()
 
@@ -268,10 +269,20 @@ class PlannerApp:
         if self.window.isVisible():
             self.window.snack("Time to wrap up your day", "Start review", self.show_review)
 
-    def show_stats(self, project_id=None):
+    def show_stats(self, project_id=None, tab=None):
         self.open_window()
         StatsDialog(self.window, self.store, self.theme.c, project_id=project_id,
-                    on_open_project=self.window.show_projects).exec()
+                    on_open_project=self.window.show_projects, tab=tab).exec()
+
+    def _on_unblocked(self, tasks):
+        """A prerequisite was finished: tell the user which waiting tasks can start now."""
+        from .numbering import titled
+        names = ", ".join(titled(t) for t in tasks[:3]) + ("…" if len(tasks) > 3 else "")
+        msg = f"Ready to start: {names}"
+        if self.window.isVisible():
+            QTimer.singleShot(0, lambda: self.window.snack(msg, "Show", lambda: self.window.reveal_task(tasks[0]["id"])))
+        if self.tray.isVisible():
+            self.tray.showMessage("Unblocked", msg, QSystemTrayIcon.Information, 5000)
 
     def show_review(self):
         self.open_window()

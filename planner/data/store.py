@@ -204,15 +204,15 @@ class Store:
         self.db.execute(
             f"{mode} INTO tasks (id, date, start_time, end_time, title, note, done, "
             f"created_at, updated_at, completed_at, priority, tags, pinned, recurrence, recur_parent, "
-            f"project_id, project_pos, start_at, end_at, status, number, sub_seq) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"project_id, project_pos, start_at, end_at, status, number, sub_seq, dep_blocked) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (t["id"], sa.date().isoformat(), f"{sa:%H:%M}", f"{ea:%H:%M}", t["title"], t["note"],
              int(bool(t["done"])),
              t["created_at"], t["updated_at"], t["completed_at"], int(t.get("priority", 1)),
              t.get("tags", ""), int(bool(t.get("pinned"))), t.get("recurrence", ""),
              t.get("recur_parent", ""), t.get("project_id", "") or "", int(t.get("project_pos", 0) or 0),
              TS.to_str(sa), TS.to_str(ea), STATUS.normalize(t.get("status", "open"), t.get("done")),
-             int(t.get("number", 0) or 0), int(t.get("sub_seq", 0) or 0)))
+             int(t.get("number", 0) or 0), int(t.get("sub_seq", 0) or 0), int(bool(t.get("dep_blocked")))))
 
     def _insert_subtask(self, tid, position, title, done, created_at=None, completed_at=None,
                         sid=None, mode="INSERT", number=None):
@@ -390,6 +390,7 @@ class Store:
                 "project_pos": row["project_pos"] if "project_pos" in keys else 0,
                 "number": row["number"] if "number" in keys else 0,
                 "sub_seq": row["sub_seq"] if "sub_seq" in keys else 0,
+                "dep_blocked": bool(row["dep_blocked"]) if "dep_blocked" in keys else False,
                 "status": STATUS.normalize(row["status"] if "status" in keys else "open", bool(row["done"])),
                 "sub_total": row["sub_total"] if "sub_total" in keys else 0,
                 "sub_done": row["sub_done"] if "sub_done" in keys else 0,
@@ -508,6 +509,9 @@ class Store:
              "pinned": bool(pinned), "recurrence": recurrence if R.is_valid(recurrence) else "",
              "recur_parent": recur_parent, "project_id": project_id,
              "project_pos": self._next_project_pos(project_id) if project_id else 0, "status": status}
+        if project_id and subtasks is None and not recur_parent:
+            # a new project task starts with the project's checklist (e.g. outline/record/edit)
+            subtasks = [{"title": x} for x in self.project_checklist(project_id)]
         n = sum(1 for s in subtasks or [] if (s.get("title") or "").strip())
         with self.db:
             t["number"] = self._next_task_no(project_id)      # #n in its project (0 outside one)
@@ -585,6 +589,8 @@ class Store:
         if "project_id" in new and "project_pos" not in new and new["project_id"]:
             sets.append("project_pos = ?")
             vals.append(self._next_project_pos(new["project_id"]))
+        if "status" in new and "dep_blocked" not in new and t["dep_blocked"]:
+            sets.append("dep_blocked = 0")         # the user set the status: no longer ours to undo
         if "project_id" in new and "number" not in new:
             # a task joining a project gets that project's next number; leaving one drops it
             sets.append("number = ?")
@@ -606,9 +612,12 @@ class Store:
                 self._log(tid, "project", f"→ {p['name']}" if p else "removed from project")
             if "status" in new and new["status"] not in (STATUS.DONE, STATUS.OPEN):
                 self._log(tid, "status", STATUS.label(new["status"]))
-            edited = [k for k in new if k not in ("done", "pinned", "project_id", "project_pos", "status")]
+            edited = [k for k in new if k not in ("done", "pinned", "project_id", "project_pos", "status",
+                                                    "dep_blocked")]
             if edited:
                 self._log(tid, "edited", ", ".join(edited))
+        if "status" in new:
+            self._sync_dependents(tid)
         return self.find(tid)
 
     def set_subtasks(self, tid, items) -> bool:
@@ -646,12 +655,17 @@ class Store:
         t = self.find(tid)
         if t:
             t["subtasks"] = self.subtasks(tid)
+            t["deps"] = [tuple(r) for r in self.db.execute(
+                "SELECT task_id, depends_on FROM task_deps WHERE task_id = ? OR depends_on = ?", (tid, tid))]
+            dependents = self.dependents(tid)
             with self.db:
                 if t["recurrence"]:
                     self.db.execute("INSERT OR IGNORE INTO recur_skips (series, day) VALUES (?, ?)",
                                     (self.series_parent(t), t["date"]))
                 self.db.execute("DELETE FROM tasks WHERE id = ?", (tid,))
                 self._log(tid, "deleted")
+            for d in dependents:                 # a deleted prerequisite no longer holds anything up
+                self._resolve_blocked(d)
         return t
 
     def restore(self, t):
@@ -664,7 +678,10 @@ class Store:
                 self._insert_subtask(t["id"], s["position"], s["title"], s["done"], s["created_at"],
                                      s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE",
                                      number=s.get("number"))
+            for a, b in t.get("deps", []):
+                self.db.execute("INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?, ?)", (a, b))
             self._log(t["id"], "restored")
+        self._sync_dependents(t["id"])
 
     def series_parent(self, t):
         return t["recur_parent"] or t["id"]
@@ -1244,3 +1261,262 @@ class Store:
 
     def all_project_stats(self, include_done=True):
         return [self.project_stats(p["id"]) for p in self.projects(include_done=include_done)]
+
+    # ------------------------------------------------------------------ dependencies
+    def prerequisites(self, tid):
+        """Tasks `tid` waits for, as task dicts (ordered by number)."""
+        rows = self.db.execute(TASK_SELECT + " WHERE t.id IN (SELECT depends_on FROM task_deps WHERE task_id = ?)"
+                               " GROUP BY t.id ORDER BY t.number", (tid,))
+        return [self._task(r) for r in rows]
+
+    def dependents(self, tid):
+        return [r[0] for r in self.db.execute("SELECT task_id FROM task_deps WHERE depends_on = ?", (tid,))]
+
+    def deps_map(self, project_id=None):
+        """{task_id: [prerequisite ids]} (optionally only for one project's tasks)."""
+        sql = "SELECT d.task_id, d.depends_on FROM task_deps d JOIN tasks t ON t.id = d.task_id"
+        args = []
+        if project_id is not None:
+            sql += " WHERE t.project_id = ?"
+            args.append(project_id)
+        out = {}
+        for a, b in self.db.execute(sql, args):
+            out.setdefault(a, []).append(b)
+        return out
+
+    def _waits(self, tid) -> bool:
+        """True if any prerequisite is still to do (not done or cancelled)."""
+        r = self.db.execute("SELECT COUNT(*) FROM task_deps d JOIN tasks p ON p.id = d.depends_on "
+                            "WHERE d.task_id = ? AND p.status NOT IN ('done', 'cancelled')", (tid,)).fetchone()
+        return r[0] > 0
+
+    def would_cycle(self, tid, prereq_ids) -> bool:
+        """Would making tid wait for prereq_ids create a loop (a task ending up waiting for itself)?"""
+        seen, stack = set(), list(prereq_ids)
+        while stack:
+            x = stack.pop()
+            if x == tid:
+                return True
+            if x in seen:
+                continue
+            seen.add(x)
+            stack += [r[0] for r in self.db.execute("SELECT depends_on FROM task_deps WHERE task_id = ?", (x,))]
+        return False
+
+    def set_prerequisites(self, tid, prereq_ids):
+        """Replace what tid waits for. Raises ValueError on a loop. Blocks or unblocks tid to match."""
+        prereq_ids = [x for x in dict.fromkeys(prereq_ids) if x and x != tid]
+        if self.would_cycle(tid, prereq_ids):
+            raise ValueError("That would make tasks wait for each other in a loop")
+        old = {p["id"] for p in self.prerequisites(tid)}
+        if old == set(prereq_ids):
+            return
+        with self.db:
+            self.db.execute("DELETE FROM task_deps WHERE task_id = ?", (tid,))
+            self.db.executemany("INSERT INTO task_deps (task_id, depends_on) VALUES (?, ?)",
+                                [(tid, x) for x in prereq_ids])
+            names = [NUM.titled(self.find(x)) for x in prereq_ids]
+            self._log(tid, "waits for", ", ".join(names) if names else "nothing")
+        self._resolve_blocked(tid)
+
+    def _resolve_blocked(self, tid):
+        """Block a waiting task, or reopen one we blocked once nothing holds it up.
+        Returns 'blocked', 'unblocked' or None."""
+        t = self.find(tid)
+        if not t:
+            return None
+        waits = self._waits(tid)
+        if waits and t["status"] in (STATUS.OPEN, STATUS.IN_PROGRESS):
+            with self.db:
+                self.db.execute("UPDATE tasks SET status = 'blocked', done = 0, dep_blocked = 1, updated_at = ? "
+                                "WHERE id = ?", (now_stamp(), tid))
+                self._log(tid, "status", "Blocked (waiting for a prerequisite)")
+            return "blocked"
+        if not waits and t["dep_blocked"] and t["status"] == STATUS.BLOCKED:
+            with self.db:
+                self.db.execute("UPDATE tasks SET status = 'open', dep_blocked = 0, updated_at = ? WHERE id = ?",
+                                (now_stamp(), tid))
+                self._log(tid, "status", "Open (prerequisites done)")
+            return "unblocked"
+        if not waits and t["dep_blocked"]:
+            with self.db:
+                self.db.execute("UPDATE tasks SET dep_blocked = 0 WHERE id = ?", (tid,))
+        return None
+
+    on_unblocked = None        # callback(list of task dicts) set by the app for notifications
+
+    def _sync_dependents(self, tid):
+        """After tid's status changed: re-check everything waiting for it."""
+        freed = []
+        for d in self.dependents(tid):
+            if self._resolve_blocked(d) == "unblocked":
+                freed.append(self.find(d))
+        if freed and self.on_unblocked:
+            self.on_unblocked(freed)
+        return freed
+
+    # ------------------------------------------------------------------ checklists & templates
+    def project_checklist(self, pid):
+        p = self.project(pid)
+        if not p or not p.get("task_checklist"):
+            return []
+        try:
+            return [str(x) for x in json.loads(p["task_checklist"]) if str(x).strip()]
+        except ValueError:
+            return []
+
+    def set_project_checklist(self, pid, titles):
+        self.update_project(pid, task_checklist=json.dumps([t.strip() for t in titles if t.strip()]))
+
+    def apply_checklist(self, tid, titles):
+        """Add the checklist's subtasks to a task, skipping ones it already has. Returns how many."""
+        have = {s["title"].strip().lower() for s in self.subtasks(tid)}
+        n = 0
+        for title in titles:
+            if title.strip() and title.strip().lower() not in have:
+                self.add_subtask(tid, title)
+                n += 1
+        return n
+
+    def templates(self):
+        out = []
+        for r in self.db.execute("SELECT * FROM project_templates ORDER BY name COLLATE NOCASE"):
+            d = dict(r)
+            try:
+                d["data"] = json.loads(d["data"])
+            except ValueError:
+                d["data"] = {"tasks": []}
+            out.append(d)
+        return out
+
+    def save_template(self, pid, name, description="", include_dates=True):
+        """Store a project's structure: tasks (offsets from the project start and lengths when
+        include_dates, else stacked one working day each), subtasks, dependencies, checklist."""
+        p = self.project(pid)
+        ps = TS.to_dt(p["start_at"])
+        tasks = self.project_tasks(pid)
+        index = {t["id"]: i for i, t in enumerate(tasks)}
+        deps = self.deps_map(pid)
+        items = []
+        for t in tasks:
+            sa, ea = TS.to_dt(t["start_at"]), TS.to_dt(t["end_at"])
+            items.append({
+                "title": t["title"], "note": t["note"], "tags": t["tags"], "priority": t["priority"],
+                "offset_min": int((sa - ps).total_seconds() // 60) if include_dates else None,
+                "length_min": int((ea - sa).total_seconds() // 60) if include_dates else None,
+                "subtasks": [s["title"] for s in self.subtasks(t["id"])],
+                "waits_for": [index[x] for x in deps.get(t["id"], []) if x in index],
+            })
+        data = {"color": p["color"], "description": p["description"],
+                "length_min": int((TS.to_dt(p["end_at"]) - ps).total_seconds() // 60),
+                "checklist": self.project_checklist(pid), "tasks": items}
+        tid = uuid.uuid4().hex
+        with self.db:
+            self.db.execute("INSERT INTO project_templates (id, name, description, data, created_at) "
+                            "VALUES (?, ?, ?, ?, ?)", (tid, name.strip(), description, json.dumps(data), now_stamp()))
+        return tid
+
+    def delete_template(self, template_id):
+        with self.db:
+            self.db.execute("DELETE FROM project_templates WHERE id = ?", (template_id,))
+
+    def project_from_template(self, template_id, name, start_at, color=None):
+        """New project from a template, its tasks placed relative to start_at."""
+        tpl = next((t for t in self.templates() if t["id"] == template_id), None)
+        if tpl is None:
+            raise KeyError(template_id)
+        data = tpl["data"]
+        start = TS.to_dt(start_at)
+        p = self.add_project(name, description=data.get("description", ""), color=color or data.get("color", ""),
+                             start_at=start, end_at=start + timedelta(minutes=data.get("length_min") or 30 * 1440))
+        if data.get("checklist"):
+            self.set_project_checklist(p["id"], data["checklist"])
+        wd = self.workday()
+        cursor = start.date()
+        ids = []
+        for item in data.get("tasks", []):
+            if item.get("offset_min") is not None:
+                sa = start + timedelta(minutes=item["offset_min"])
+                ea = sa + timedelta(minutes=max(15, item.get("length_min") or 60))
+            else:                                    # no dates saved: one working day each, in order
+                while cursor.weekday() >= 5:
+                    cursor += timedelta(days=1)
+                sa, ea = TS.make_span(cursor, *wd)
+                cursor += timedelta(days=1)
+            t = self.add(None, item["title"], note=item.get("note", ""), start_at=sa, end_at=ea,
+                         priority=item.get("priority", 1), tags=item.get("tags", ""), project_id=p["id"],
+                         subtasks=[{"title": s} for s in item.get("subtasks", [])])
+            ids.append(t["id"])
+        for i, item in enumerate(data.get("tasks", [])):
+            pre = [ids[j] for j in item.get("waits_for", []) if 0 <= j < len(ids)]
+            if pre:
+                self.set_prerequisites(ids[i], pre)
+        return self.project(p["id"])
+
+    # ------------------------------------------------------------------ focus insights
+    def focus_sessions(self, d0: date, d1: date):
+        """Sessions started between d0 and d1 (inclusive), with their task's project."""
+        rows = self.db.execute(
+            "SELECT f.*, COALESCE(t.project_id, '') project_id, COALESCE(t.title, '(deleted task)') title "
+            "FROM focus_sessions f LEFT JOIN tasks t ON t.id = f.task_id "
+            "WHERE f.started_at >= ? AND f.started_at < ? AND f.seconds > 0 ORDER BY f.started_at",
+            (d0.isoformat(), (d1 + timedelta(days=1)).isoformat()))
+        return [dict(r) for r in rows]
+
+    def focus_insights(self, today: date, weeks=4):
+        """Focus by project, hour of day and weekday over `weeks`, plus this week's
+        planned (time-blocked) vs actually focused time per day and per project."""
+        d0 = today - timedelta(days=7 * weeks - 1)
+        sessions = self.focus_sessions(d0, today)
+        by_hour = [0] * 24
+        by_weekday = [0] * 7
+        by_project = {}
+        for s in sessions:
+            st = datetime.fromisoformat(s["started_at"])
+            secs = s["seconds"]
+            # spread a session over the hours it covered (by wall-clock from its start)
+            t, left = st, secs
+            while left > 0:
+                chunk = min(left, 3600 - (t.minute * 60 + t.second))
+                by_hour[t.hour] += chunk
+                left -= chunk
+                t += timedelta(seconds=chunk)
+            by_weekday[st.weekday()] += secs
+            by_project[s["project_id"]] = by_project.get(s["project_id"], 0) + secs
+        week0 = today - timedelta(days=today.weekday())
+        week_days = [week0 + timedelta(days=i) for i in range(7)]
+        week_sessions = [s for s in sessions if s["started_at"][:10] >= week0.isoformat()]
+        if week0 < d0:
+            week_sessions = self.focus_sessions(week0, week_days[-1])
+        planned_day, worked_day = {}, {}
+        planned_proj, worked_proj = {}, {}
+        for d in week_days:
+            lo, hi = datetime.combine(d, datetime.min.time()), datetime.combine(d + timedelta(days=1), datetime.min.time())
+            for t in self.for_day(d):
+                if t["status"] == STATUS.CANCELLED:
+                    continue
+                sa, ea = TS.to_dt(t["start_at"]), TS.to_dt(t["end_at"])
+                if (ea - sa) >= timedelta(hours=6):    # whole-day placeholders aren't a plan for hours
+                    continue
+                secs = (min(ea, hi) - max(sa, lo)).total_seconds()
+                if secs > 0:
+                    planned_day[d] = planned_day.get(d, 0) + secs
+                    planned_proj[t["project_id"]] = planned_proj.get(t["project_id"], 0) + secs
+        for s in week_sessions:
+            d = date.fromisoformat(s["started_at"][:10])
+            worked_day[d] = worked_day.get(d, 0) + s["seconds"]
+            worked_proj[s["project_id"]] = worked_proj.get(s["project_id"], 0) + s["seconds"]
+        total = sum(s["seconds"] for s in sessions)
+        days_with = len({s["started_at"][:10] for s in sessions})
+        return {
+            "from": d0, "to": today, "sessions": len(sessions), "total": total,
+            "avg_per_focus_day": total / days_with if days_with else 0,
+            "longest": max((s["seconds"] for s in sessions), default=0),
+            "completed": sum(1 for s in sessions if s["completed"]),
+            "by_hour": by_hour, "by_weekday": by_weekday,
+            "by_project": dict(sorted(by_project.items(), key=lambda kv: -kv[1])),
+            "best_hour": max(range(24), key=lambda h: by_hour[h]) if total else None,
+            "week": [{"date": d, "planned": planned_day.get(d, 0), "worked": worked_day.get(d, 0)} for d in week_days],
+            "week_projects": {k: {"planned": planned_proj.get(k, 0), "worked": worked_proj.get(k, 0)}
+                              for k in set(planned_proj) | set(worked_proj)},
+        }

@@ -154,7 +154,12 @@ class ProjectsPage(QWidget):
         new = set_kind(QPushButton("  New project"), "tonal")
         new.setToolTip("New project (Ctrl+Shift+N)")
         new.setCursor(Qt.PointingHandCursor)
-        new.clicked.connect(self.new_project)
+        new_menu = QMenu(new)
+        a = new_menu.addAction("Blank project…\tCtrl+Shift+N")
+        a.triggered.connect(self.new_project)
+        a = new_menu.addAction("From a template…")
+        a.triggered.connect(self.new_from_template)
+        new.setMenu(new_menu)
         host._icons.append((new, "add", "onSecondaryContainer", None))
         top.addWidget(new)
         v.addLayout(top)
@@ -213,6 +218,16 @@ class ProjectsPage(QWidget):
         head.addWidget(h._icon_btn("chart", "Project statistics (Ctrl+Shift+S)", self.show_stats))
         head.addWidget(h._icon_btn("edit", "Edit project (dates, colour, status)", self.edit_project))
         head.addWidget(h._icon_btn("delete", "Delete project", self.delete_project))
+        more = h._icon_btn("more", "More: templates, checklist, export", lambda: None)
+        more.clicked.disconnect()
+        more_menu = QMenu(more)
+        for text, fn in (("Save as template…", self.save_template),
+                         ("Checklist for new tasks…", self.edit_checklist),
+                         ("Renumber tasks…", self.renumber),
+                         ("Export to calendar (.ics)…", lambda: self.host.export_calendar(self.current_id))):
+            more_menu.addAction(text).triggered.connect(fn)
+        more.setMenu(more_menu)
+        head.addWidget(more)
         lay.addLayout(head)
 
         self.range_lbl = set_role(QLabel(), "muted")
@@ -512,7 +527,7 @@ class ProjectsPage(QWidget):
         self.tree_empty.hide()
         self.gantt_bar.show()
         self.gantt.show()
-        self.gantt.set_tasks(p, tasks, self.host.theme.c, select=select)
+        self.gantt.set_tasks(p, tasks, self.host.theme.c, select=select, deps=self.store.deps_map(p["id"]))
         if p["id"] not in self._gantt_fitted:          # first time this project is shown: fit it
             self._gantt_fitted.add(p["id"])
             QTimer.singleShot(0, self.gantt.fit)
@@ -546,7 +561,7 @@ class ProjectsPage(QWidget):
     def _fill_board(self, p, select):
         tasks = self.store.project_tasks(p["id"])
         self.board.set_tasks(tasks, self.host.theme.c, hide_done=self.hide_done.isChecked(),
-                             select=select or self.board.selected_id)
+                             select=select or self.board.selected_id, deps=self.store.deps_map(p["id"]))
         self.tree.hide()
         self.board.setVisible(bool(tasks))
         self.tree_empty.setVisible(not tasks)
@@ -607,6 +622,8 @@ class ProjectsPage(QWidget):
         keep_sub = None if select else self.selected()[2]
         tasks = self.store.project_tasks(p["id"])
         subs = self.store.subtasks_for_project(p["id"])
+        deps = self.store.deps_map(p["id"])
+        by_id = {x["id"]: x for x in self.store.project_tasks(p["id"])}
         if self.hide_done.isChecked():
             tasks = [t for t in tasks if not t["done"]]
         pstart, pend = p["start_at"], p["end_at"]
@@ -636,6 +653,13 @@ class ProjectsPage(QWidget):
             it.setText(3, "   ".join(prog))
             length = (TS.to_dt(task["end_at"]) - TS.to_dt(task["start_at"])).total_seconds()
             tip = f"{TS.span_label(task['start_at'], task['end_at'])}   ({TS.fmt_length(length)})"
+            pre = deps.get(task["id"], [])
+            if pre:
+                waits_txt = " ".join(NUM.task_no(by_id[x]) or by_id[x]["title"] for x in pre if x in by_id)
+                open_pre = [x for x in pre if x in by_id and by_id[x]["status"] not in (STATUS.DONE, STATUS.CANCELLED)]
+                prog.insert(0, ("⛓ " if open_pre else "✓⛓ ") + waits_txt)
+                it.setText(3, "   ".join(prog))
+                tip += f"\nWaits for: {waits_txt}" + ("" if open_pre else " (all done)")
             if task["note"]:
                 tip += "\n\n" + task["note"]
             inactive = st in STATUS.INACTIVE
@@ -745,6 +769,49 @@ class ProjectsPage(QWidget):
             self.host.snack(f"Project “{p['name']}” created. Add its tasks below")
             return p
         return None
+
+    def new_from_template(self):
+        from .tools_dialogs import TemplatePickerDialog
+        dlg = TemplatePickerDialog(self.host, self.store)
+        if dlg.exec():
+            tid, name, start = dlg.values()
+            if not tid:
+                return
+            p = self.store.project_from_template(tid, name, start)
+            self.filter = "open" if self.filter == "done" else self.filter
+            self.current_id = p["id"]
+            self.refresh()
+            n = len(self.store.project_tasks(p["id"]))
+            self.host.snack(f"Created “{p['name']}” with {n} task(s) from the template")
+
+    def save_template(self):
+        from .tools_dialogs import SaveTemplateDialog
+        p = self.project()
+        if not p:
+            return
+        dlg = SaveTemplateDialog(self.host, p)
+        if dlg.exec():
+            name, desc, dates = dlg.values()
+            if name:
+                self.store.save_template(p["id"], name, desc, include_dates=dates)
+                self.host.snack(f"Saved template “{name}”. Use New project → From a template")
+
+    def edit_checklist(self):
+        from .tools_dialogs import ChecklistDialog
+        p = self.project()
+        if not p:
+            return
+        tasks = self.store.project_tasks(p["id"])
+        dlg = ChecklistDialog(self.host, p, self.store.project_checklist(p["id"]), len(tasks))
+        if dlg.exec():
+            titles, apply_all = dlg.values()
+            self.store.set_project_checklist(p["id"], titles)
+            added = 0
+            if apply_all:
+                for t in tasks:
+                    added += self.store.apply_checklist(t["id"], titles)
+            self.refresh()
+            self.host.snack("Checklist saved" + (f"; added {added} subtask(s) to existing tasks" if added else ""))
 
     def edit_project(self):
         p = self.project()

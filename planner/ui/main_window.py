@@ -370,6 +370,92 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         pid = self.projects_page.current_id if self.on_projects() else None
         self.app.show_stats(project_id=pid)
 
+    # ------------------------------------------------------------------ palette & tools
+    def show_palette(self):
+        from .palette import CommandPalette
+        CommandPalette(self).exec()
+
+    def reveal_task(self, tid):
+        """Show a task where it lives: its project (selected), else its start day."""
+        t = self.store.find(tid)
+        if not t:
+            return
+        if t["project_id"]:
+            self.show_projects(t["project_id"], select=tid)
+        else:
+            self.show_day(date.fromisoformat(t["date"]), select=tid)
+
+    def palette_set_status(self, tid, status):
+        t = self.store.find(tid)
+        if not t or t["status"] == status:
+            return
+        old = t["status"]
+        self.store.set_status(tid, status)
+        self._push_undo("status", lambda: (self.store.set_status(tid, old), tid)[1])
+        self.refresh(select=tid)
+        self.snack(f"{NUM.titled(t)[:40]} → {STATUS.label(status)}", "Undo", self.undo)
+        self.task_done_changed(tid)
+
+    def palette_focus(self, tid):
+        self.reveal_task(tid)
+        self.start_focus()
+
+    def palette_edit(self, tid):
+        self.reveal_task(tid)
+        self.edit_task()
+
+    def palette_new_task(self, text):
+        p = parse(text, date.today())
+        if not p.title:
+            return
+        pid = self.projects_page.current_id if self.on_projects() else ""
+        t = self.store.add(p.date or (self.current if not pid else None), p.title, p.start, p.end,
+                           priority=p.priority, tags=" ".join(p.tags), pinned=p.pinned, project_id=pid)
+        self.reveal_task(t["id"])
+        self.snack(f"Added {NUM.titled(t)}")
+
+    def export_calendar(self, project_id=None):
+        from .tools_dialogs import ExportCalendarDialog
+        dlg = ExportCalendarDialog(self, self.store, project_id)
+        if dlg.exec():
+            path = dlg.save(self)
+            if path:
+                self.snack(f"Saved {len(dlg.tasks())} event(s) to {path}")
+
+    def palette_actions(self):
+        """(name, shortcut, icon, callable) for the command palette."""
+        f = self.app.focus
+        pp = self.projects_page
+        acts = [
+            ("New task", "Ctrl+N", "add", lambda: self.add_task()),
+            ("New project", "Ctrl+Shift+N", "folder", self.new_project),
+            ("New project from template…", "", "folder", lambda: (self.show_projects(), pp.new_from_template())),
+            ("Today", "Ctrl+T", "today", self.go_today),
+            ("Plan tomorrow", "Ctrl+P", "event", self.plan_tomorrow),
+            ("Week planner", "Ctrl+Shift+W", "view_week", lambda: self.show_week()),
+            ("Projects", "Ctrl+J", "folder", lambda: self.show_projects()),
+            ("Project board (Kanban)", "Ctrl+Shift+K", "folder", lambda: (self.show_projects(), pp.set_view("board"))),
+            ("Project timeline (Gantt)", "Ctrl+Shift+T", "folder", lambda: (self.show_projects(), pp.set_view("timeline"))),
+            ("Project list", "Ctrl+Shift+L", "folder", lambda: (self.show_projects(), pp.set_view("list"))),
+            ("Statistics", "Ctrl+Shift+S", "chart", self.show_stats),
+            ("Focus insights", "", "timer", lambda: self.app.show_stats(tab="focus")),
+            ("Review my day", "Ctrl+E", "done_all", lambda: self.app.show_review()),
+            ("Export to calendar (.ics)…", "", "event", lambda: self.export_calendar(
+                pp.current_id if self.on_projects() else None)),
+            ("Quick add", "Ctrl+L", "add", self.focus_quick),
+            ("Theme", "Ctrl+,", "palette", self.toggle_drawer),
+            ("Keyboard shortcuts", "F1", None, self.show_shortcuts),
+            ("Check for updates…", "", None, lambda: self.app.show_updates()),
+        ]
+        if f.active:
+            acts.insert(0, ("Stop focus", "Ctrl+F", "timer", f.stop))
+            acts.insert(1, ("Resume focus" if f.paused else "Pause focus", "Ctrl+Shift+F", "timer", f.toggle_pause))
+        elif self.selected_id():
+            acts.insert(0, ("Start focus on the selected task", "Ctrl+F", "timer", lambda: self.start_focus()))
+        if self._undo:
+            acts.insert(0, (f"Undo {self._undo[-1][0]}", "Ctrl+Z", "undo", self.undo))
+        return acts
+
     def new_project(self):
         if not self.on_projects():
             self.show_projects()
@@ -531,6 +617,8 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             extras.append(f"› {p['name']}")
         if t["tags"] and t["note"]:   # if there's a note, keep tags inline in the title
             extras.append(" ".join("#" + x for x in t["tags"].split()))
+        if t["dep_blocked"] or (t["id"] in getattr(self, "_deps", {}) and t["status"] == STATUS.BLOCKED):
+            extras.append("⛓ waiting")
         if t["sub_total"]:
             extras.append(f"✓ {t['sub_done']}/{t['sub_total']}")
         if t["focus_seconds"] >= 60:
@@ -568,6 +656,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         c = self.theme.c
         keep = select or self.selected_id()
         self._projects = {p["id"]: p for p in self.store.projects()}
+        self._deps = self.store.deps_map()
         self._rebuild_filter_bar()
         all_today = self.store.for_day(self.current)
         if self._filter and self._filter[0] == "tag":

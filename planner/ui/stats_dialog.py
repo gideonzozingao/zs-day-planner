@@ -12,7 +12,7 @@ All drawing uses the status colours so it matches the task list.
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
@@ -138,8 +138,89 @@ class CountChart(QWidget):
                            d["date"].strftime("%d/%m"))
 
 
+class HourChart(QWidget):
+    """24 bars: focused minutes by hour of day; the best hour highlighted."""
+
+    def __init__(self, seconds_by_hour, color, workday=None):
+        super().__init__()
+        self.data, self.color, self.workday = seconds_by_hour, color, workday
+        self.setFixedHeight(120)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        n = 24
+        pad_b, pad_t = 18, 14
+        w, h = self.width(), self.height() - pad_b - pad_t
+        gap = 3
+        bw = (w - gap * (n - 1)) / n
+        top = max(1, max(self.data))
+        best = max(range(n), key=lambda i: self.data[i]) if any(self.data) else -1
+        p.setFont(QFont(self.font().family(), 7))
+        for i, secs in enumerate(self.data):
+            x = i * (bw + gap)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(136, 136, 136, 40))
+            p.drawRoundedRect(QRectF(x, pad_t, bw, h), 2, 2)
+            if secs:
+                bh = max(2, h * secs / top)
+                c = QColor(self.color)
+                if i != best:
+                    c.setAlpha(150)
+                p.setBrush(c)
+                p.drawRoundedRect(QRectF(x, pad_t + h - bh, bw, bh), 2, 2)
+            if i % 3 == 0:
+                p.setPen(QColor("#999999"))
+                p.drawText(QRectF(x - 6, pad_t + h + 2, bw + 12, pad_b), Qt.AlignHCenter | Qt.AlignTop, f"{i:02d}")
+        if best >= 0:
+            x = best * (bw + gap)
+            p.setPen(QColor(self.color))
+            p.drawText(QRectF(x - 30, 0, bw + 60, pad_t), Qt.AlignCenter, "best")
+
+
+class PlanVsWorkChart(QWidget):
+    """Per day: planned time-block hours (outline bar) vs focused hours (filled bar)."""
+
+    def __init__(self, days, planned_color, worked_color):
+        super().__init__()
+        self.days, self.pc, self.wc = days, planned_color, worked_color
+        self.setFixedHeight(150)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        n = len(self.days)
+        pad_b, pad_t = 20, 16
+        w, h = self.width(), self.height() - pad_b - pad_t
+        slot = w / max(1, n)
+        top = max(3600, max(max(d["planned"], d["worked"]) for d in self.days))
+        p.setFont(QFont(self.font().family(), 7))
+        for i, d in enumerate(self.days):
+            x = i * slot + slot * 0.18
+            bw = slot * 0.3
+            for j, (val, col, filled) in enumerate(((d["planned"], self.pc, False), (d["worked"], self.wc, True))):
+                bh = h * val / top
+                r = QRectF(x + j * (bw + 3), pad_t + h - bh, bw, bh)
+                c = QColor(col)
+                if filled:
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(c)
+                else:
+                    p.setPen(QPen(c, 1.5))
+                    c2 = QColor(col)
+                    c2.setAlpha(50)
+                    p.setBrush(c2)
+                if val:
+                    p.drawRoundedRect(r, 3, 3)
+            p.setPen(QColor("#999999"))
+            p.drawText(QRectF(i * slot, pad_t + h + 3, slot, pad_b), Qt.AlignHCenter | Qt.AlignTop,
+                       d["date"].strftime("%a"))
+            label = f"{d['worked'] / 3600:.1f}/{d['planned'] / 3600:.1f}h" if (d["planned"] or d["worked"]) else ""
+            p.drawText(QRectF(i * slot, 0, slot, pad_t), Qt.AlignCenter, label)
+
+
 class StatsDialog(FadeDialog):
-    def __init__(self, parent, store, colors, today=None, project_id=None, on_open_project=None):
+    def __init__(self, parent, store, colors, today=None, project_id=None, on_open_project=None, tab=None):
         """project_id: open on the Projects tab with that project selected.
         on_open_project(pid): called by "Open project" (the dialog closes first)."""
         super().__init__(parent)
@@ -153,8 +234,11 @@ class StatsDialog(FadeDialog):
         self.tabs.addTab(self._scroll(self._today_tab()), "Today")
         self.tabs.addTab(self._scroll(self._overall_tab()), "Overall")
         self.tabs.addTab(self._projects_tab(project_id), "Projects")
+        self.tabs.addTab(self._scroll(self._focus_tab()), "Focus")
         if project_id:
             self.tabs.setCurrentIndex(2)
+        if tab == "focus":
+            self.tabs.setCurrentIndex(3)
         lay.addWidget(self.tabs, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
@@ -507,5 +591,104 @@ class StatsDialog(FadeDialog):
         if s["tags"]:
             v.addWidget(set_role(QLabel("BY TAG"), "label"))
             v.addLayout(self._tag_rows(s["tags"]))
+        v.addStretch()
+        return w
+
+    # ---- Focus insights
+    def _focus_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(4, 10, 4, 4)
+        v.setSpacing(12)
+        fi = self.store.focus_insights(self.today, weeks=4)
+        accent = self.c.get("primary", "#6750A4")
+        if not fi["sessions"]:
+            v.addWidget(set_role(QLabel("No focus sessions in the last 4 weeks yet.\nStart one on a task with "
+                                        "Ctrl+F (or right-click → Focus) and your patterns show up here."), "muted"))
+            v.addStretch()
+            return w
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+        cards.addWidget(self._stat_card(fmt_duration(fi["total"]), "focused, last 4 weeks", accent))
+        cards.addWidget(self._stat_card(fmt_duration(int(fi["avg_per_focus_day"])), "per focus day"))
+        cards.addWidget(self._stat_card(str(fi["sessions"]), f"sessions · {fi['completed']} ran to the end"))
+        cards.addWidget(self._stat_card(fmt_duration(fi["longest"]), "longest session"))
+        v.addLayout(cards)
+
+        v.addWidget(set_role(QLabel("THIS WEEK: PLANNED VS ACTUALLY FOCUSED"), "label"))
+        v.addWidget(PlanVsWorkChart(fi["week"], self.c.get("outline", "#888888"), accent))
+        planned = sum(d["planned"] for d in fi["week"])
+        worked = sum(d["worked"] for d in fi["week"])
+        ratio = f"{worked / planned * 100:.0f}%" if planned else "n/a"
+        note = set_role(QLabel(f"Outlined bars: time-blocked hours (tasks shorter than a working day). "
+                               f"Filled: focus sessions. Labels: focused / planned hours. This week {fmt_duration(int(worked))} focused of "
+                               f"{fmt_duration(int(planned))} planned ({ratio})."), "hint")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        if fi["week_projects"]:
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(6)
+            for c, head in enumerate(("PROJECT", "PLANNED", "FOCUSED", "")):
+                grid.addWidget(set_role(QLabel(head), "label"), 0, c)
+            rows = sorted(fi["week_projects"].items(), key=lambda kv: -(kv[1]["planned"] + kv[1]["worked"]))
+            for r, (pid, b) in enumerate(rows[:8], start=1):
+                p = self.store.project(pid) if pid else None
+                name = QLabel(p["name"] if p else "(no project)")
+                name.setTextFormat(Qt.PlainText)
+                if p:
+                    name.setStyleSheet(f"color:{p['color'] or '#888'};font-weight:600;")
+                grid.addWidget(name, r, 0)
+                grid.addWidget(QLabel(fmt_duration(int(b["planned"])) if b["planned"] else "–"), r, 1)
+                grid.addWidget(QLabel(fmt_duration(int(b["worked"])) if b["worked"] else "–"), r, 2)
+                diff = b["worked"] - b["planned"]
+                verdict = "" if not b["planned"] else ("over plan" if diff > 900 else "under plan" if diff < -900
+                                                       else "on plan")
+                grid.addWidget(set_role(QLabel(verdict), "danger" if verdict == "under plan" else "muted"), r, 3)
+            grid.setColumnStretch(0, 1)
+            v.addLayout(grid)
+
+        best = fi["best_hour"]
+        v.addWidget(set_role(QLabel("WHEN YOU FOCUS (BY HOUR, LAST 4 WEEKS)"), "label"))
+        v.addWidget(HourChart(fi["by_hour"], accent))
+        if best is not None:
+            v.addWidget(set_role(QLabel(f"You focus most around {best:02d}:00–{(best + 1) % 24:02d}:00. "
+                                        f"Time-block demanding work there."), "muted"))
+        v.addWidget(set_role(QLabel("BY WEEKDAY"), "label"))
+        wd = fi["by_weekday"]
+        top = max(wd) or 1
+        for i, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
+            row = QHBoxLayout()
+            day = QLabel(name)
+            day.setFixedWidth(40)
+            row.addWidget(day, 0)
+            bar = QProgressBar()
+            bar.setTextVisible(False)
+            bar.setMaximum(1000)
+            bar.setValue(int(wd[i] / top * 1000))
+            bar.setStyleSheet(f"QProgressBar::chunk{{background:{accent};border-radius:4px;}}")
+            row.addWidget(bar, 1)
+            row.addWidget(set_role(QLabel(fmt_duration(wd[i]) if wd[i] else "–"), "muted"), 0)
+            v.addLayout(row)
+        v.addWidget(set_role(QLabel("BY PROJECT (LAST 4 WEEKS)"), "label"))
+        total = fi["total"] or 1
+        for pid, secs in list(fi["by_project"].items())[:8]:
+            p = self.store.project(pid) if pid else None
+            row = QHBoxLayout()
+            name = QLabel(p["name"] if p else "(no project)")
+            name.setTextFormat(Qt.PlainText)
+            name.setMinimumWidth(160)
+            if p:
+                name.setStyleSheet(f"color:{p['color'] or '#888'};font-weight:600;")
+            row.addWidget(name)
+            bar = QProgressBar()
+            bar.setTextVisible(False)
+            bar.setMaximum(1000)
+            bar.setValue(int(secs / total * 1000))
+            col = (p or {}).get("color") or accent
+            bar.setStyleSheet(f"QProgressBar::chunk{{background:{col};border-radius:4px;}}")
+            row.addWidget(bar, 1)
+            row.addWidget(set_role(QLabel(f"{fmt_duration(secs)}  ({secs / total * 100:.0f}%)"), "muted"))
+            v.addLayout(row)
         v.addStretch()
         return w
