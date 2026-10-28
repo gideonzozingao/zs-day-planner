@@ -106,8 +106,8 @@ class TaskActionsMixin:
             if t:
                 self.store.set_prerequisites(tid, [])
             return
-        by_no = {x["number"]: x["id"] for x in self.store.project_tasks(t["project_id"])}
-        ids = [by_no[n] for n in v.get("waits_for", []) if n in by_no]
+        in_project = {x["id"] for x in self.store.project_tasks(t["project_id"])}
+        ids = [x for x in v.get("waits_for", []) if x in in_project]
         try:
             self.store.set_prerequisites(tid, ids)
         except ValueError as e:
@@ -298,6 +298,57 @@ class TaskActionsMixin:
         self.refresh(select=task["id"])
         self.snack(f"Marked {STATUS.label(nxt).lower()}", "Undo", self.undo)
         self.task_done_changed(task["id"])
+
+    def _waits_menu(self, menu, task):
+        """'Waits for' submenu: tick any number of tasks in the same project."""
+        if not task.get("project_id"):
+            return None
+        current = {p["id"] for p in self.store.prerequisites(task["id"])}
+        others = [t for t in self.store.project_tasks(task["project_id"]) if t["id"] != task["id"]]
+        label = "Waits for" + (f" ({len(current)})" if current else "")
+        sm = menu.addMenu(self._icon("history"), label)
+        if not others:
+            a = sm.addAction("No other tasks in this project")
+            a.setEnabled(False)
+            return sm
+        for t in others:
+            a = QAction(status_dot(STATUS.color(t["status"])), NUM.titled(t).replace("&", "&&"), sm)
+            a.setCheckable(True)
+            a.setChecked(t["id"] in current)
+            if t["id"] not in current and self.store.would_cycle(task["id"], [t["id"]]):
+                a.setEnabled(False)
+                a.setText(a.text() + "   (waits for this task)")
+            a.triggered.connect(lambda on, x=t["id"]: self._toggle_prereq(task["id"], x, on))
+            sm.addAction(a)
+        if current:
+            sm.addSeparator()
+            clear = sm.addAction("Clear all")
+            clear.triggered.connect(lambda: self._set_prereqs(task["id"], []))
+        return sm
+
+    def _toggle_prereq(self, tid, prereq, on):
+        ids = [p["id"] for p in self.store.prerequisites(tid)]
+        if on and prereq not in ids:
+            ids.append(prereq)
+        elif not on and prereq in ids:
+            ids.remove(prereq)
+        self._set_prereqs(tid, ids)
+
+    def _set_prereqs(self, tid, ids):
+        old = [p["id"] for p in self.store.prerequisites(tid)]
+        try:
+            self.store.set_prerequisites(tid, ids)
+        except ValueError as e:
+            self.snack(str(e))
+            return
+        self._push_undo("waits for", lambda: (self.store.set_prerequisites(tid, old), tid)[1])
+        self.refresh(select=tid)
+        t = self.store.find(tid)
+        n = len(ids)
+        msg = "No longer waits for anything" if not n else f"Waits for {n} task(s)"
+        if t and t["status"] == STATUS.BLOCKED:
+            msg += " · Blocked until they're done"
+        self.snack(msg, "Undo", self.undo)
 
     def _status_menu(self, menu, task):
         sm = menu.addMenu(status_dot(STATUS.color(task["status"])), f"Status: {STATUS.label(task['status'])}")
@@ -505,6 +556,7 @@ class TaskActionsMixin:
             self._repeat_menu(menu, task)
             self._subtask_menu(menu, task)
             self._project_menu(menu, task)
+            self._waits_menu(menu, task)
             add("Duplicate", self.duplicate_task, "add", "Ctrl+D")
             add("Copy text", self.copy_task, "copy", "Ctrl+C")
             move = menu.addMenu(self._icon("event"), "Move to")

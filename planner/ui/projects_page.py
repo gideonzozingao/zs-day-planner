@@ -1083,6 +1083,7 @@ class ProjectsPage(QWidget):
         elif task:
             add("Mark as not done" if task["done"] else "Mark as done", self.toggle_current, "check", "Space")
             h._status_menu(menu, task)
+            h._waits_menu(menu, task)
             add("Edit…", h.edit_task, "edit", "F2")
             add("Add subtask…", self.add_subtask, "subdirectory", "Ins")
             h._focus_menu(menu, task)

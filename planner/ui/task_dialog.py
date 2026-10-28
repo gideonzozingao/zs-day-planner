@@ -10,7 +10,7 @@ from PySide6.QtCore import QDate, QDateTime, QSize, Qt, QTime
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateTimeEdit, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton,
+    QMessageBox, QPlainTextEdit, QPushButton, QWidget,
 )
 
 from .. import recurrence as R
@@ -20,6 +20,7 @@ from .. import timespan as TS
 from ..quickparse import PRIORITY_NAMES, normalize_tags
 from .dialogs import FadeDialog
 from .helpers import set_kind, set_role
+from .deps_picker import DependencyPicker
 from .project_dialog import dot_icon
 from ..theme.icons import status_dot
 from .subtasks import SubtaskEditor
@@ -138,13 +139,13 @@ class TaskDialog(FadeDialog):
         self.subtasks = SubtaskEditor(colors, subtasks, task)
         self._task = task
         self._store = store
-        self.waits = QLineEdit()
-        self.waits.setPlaceholderText("e.g. #3 #5: tasks in this project that must be done first")
+        self.waits = DependencyPicker(store, task["id"] if task else None) if store else QWidget()
         self.waits.setToolTip("While any of these isn't done, this task is Blocked; it reopens\n"
                               "automatically (with a notification) when they're all done.")
-        if task and store and task.get("project_id"):
-            self.waits.setText(" ".join(f"#{p['number']}" for p in store.prerequisites(task["id"])
-                                        if p["project_id"] == task["project_id"] and p["number"]))
+        if store:
+            self.waits.set_project(project_id or (task or {}).get("project_id", ""))
+            if task:
+                self.waits.set_selected([p["id"] for p in store.prerequisites(task["id"])])
         self.number_hint = set_role(QLabel(), "hint")
         self.project.currentIndexChanged.connect(self._update_number_hint)
 
@@ -259,14 +260,12 @@ class TaskDialog(FadeDialog):
     def _project_extras(self, *_):
         """Waits-for only makes sense inside a project; a new task gets the project's checklist."""
         pid = self.project.currentData() or ""
+        if self._store is not None:
+            self.waits.set_project(pid)                 # keeps picks that are in the new project
         self.waits.setVisible(bool(pid) and self._store is not None)
         self._waits_label.setVisible(bool(pid) and self._store is not None)
         if self._task is None and self._store is not None:
             self.subtasks.set_checklist(self._store.project_checklist(pid) if pid else [])
-
-    def _waits_numbers(self):
-        import re
-        return [int(x) for x in re.findall(r"\d+", self.waits.text())]
 
     def _update_number_hint(self, *_):
         """Show the task's number in the chosen project: its own, or the one it will get."""
@@ -299,17 +298,6 @@ class TaskDialog(FadeDialog):
             QMessageBox.warning(self, "Invalid time", "The end must be after the start.")
             self.end.setFocus()
             return
-        pid = self.project.currentData() or ""
-        nums = self._waits_numbers() if pid and self._store else []
-        if nums:
-            have = {t["number"] for t in self._store.project_tasks(pid)}
-            own = self._task["number"] if self._task and self._task.get("project_id") == pid else None
-            bad = [n for n in nums if n not in have or n == own]
-            if bad:
-                QMessageBox.warning(self, "Waits for", "No such task in this project: "
-                                    + ", ".join(f"#{n}" for n in bad))
-                self.waits.setFocus()
-                return
         self.accept()
 
     def values(self):
@@ -327,5 +315,5 @@ class TaskDialog(FadeDialog):
             "pinned": self.pinned.isChecked(),
             "recurrence": self.repeat.currentData(),
             "status": self.status.currentData(),
-            "waits_for": self._waits_numbers() if (self.project.currentData() and self._store) else [],
+            "waits_for": self.waits.values() if (self.project.currentData() and self._store) else [],
         }
