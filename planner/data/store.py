@@ -57,6 +57,13 @@ class Store:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.path = Path(path)
         self.db = None
+        self.restored = False
+        if self.path == DB_FILE:
+            from .backup import apply_pending_restore
+            try:
+                self.restored = apply_pending_restore(self.path)
+            except OSError:
+                pass
         try:
             self._open()
         except sqlite3.DatabaseError:
@@ -76,6 +83,8 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        if 0 < version < SCHEMA_VERSION:
+            self._backup_before_upgrade(version)
         self._migrate()                         # add v3 columns to an older tasks table first
         self.db.executescript(SCHEMA)          # then create anything missing
         self._backfill_spans()                 # v6: give older rows a start/end date-time
@@ -112,9 +121,53 @@ class Store:
                     if (table, column) == ("tasks", "number"):
                         self._adopt_manual_numbers = True
 
+    def _backup_before_upgrade(self, version):
+        """Copy the database before its schema changes, into the user's backup folder."""
+        from .backup import backup_dir, make_backup
+        folder = ""
+        try:
+            r = self.db.execute("SELECT value FROM settings WHERE key = 'backup_dir'").fetchone()
+            folder = json.loads(r[0]) if r else ""
+        except (sqlite3.Error, ValueError):
+            pass
+        try:
+            make_backup(self.path, backup_dir(folder), reason=f"before-upgrade-v{version}", keep=0, conn=self.db)
+        except (OSError, sqlite3.Error):
+            pass                                  # never block the app from starting
+
+    def backup_folder(self):
+        from .backup import backup_dir
+        return backup_dir(self.settings.get("backup_dir", ""))
+
+    def backup_now(self, reason=""):
+        from .backup import make_backup
+        return make_backup(self.path, self.backup_folder(), reason=reason,
+                           keep=int(self.settings.get("backup_keep", 14) or 0), conn=self.db)
+
+    def daily_backup(self):
+        """Once a day, if enabled. Returns the path or None."""
+        from .backup import last_backup_date
+        if not self.settings.get("backup_auto", True):
+            return None
+        if last_backup_date(self.backup_folder()) == date.today():
+            return None
+        try:
+            return self.backup_now()
+        except (OSError, sqlite3.Error):
+            return None
+
+    def week_start_of(self, d: date) -> date:
+        """First day of d's week, by the week-start setting (Monday or Sunday)."""
+        first = int(self.settings.get("week_start", 0)) if hasattr(self, "settings") else 0
+        return d - timedelta(days=(d.weekday() - first) % 7)
+
     def workday(self):
-        """(start, end) HH:MM of the working day: first to last routine block, else 08:00-16:30.
-        Used when a task is created without times."""
+        """(start, end) HH:MM of the working day: the Settings values if set, else the routine's
+        first to last block, else 08:00-16:30. Used when a task is created without times."""
+        s = getattr(self, "settings", None) or {}
+        ws, we = s.get("workday_start") or "", s.get("workday_end") or ""
+        if ws and we and we > ws:
+            return ws, we
         rows = self.db.execute("SELECT MIN(start_time), MAX(end_time) FROM routine").fetchone()
         if rows and rows[0] and rows[1] and rows[1] > rows[0]:
             return rows[0], rows[1]
@@ -1483,7 +1536,7 @@ class Store:
                 t += timedelta(seconds=chunk)
             by_weekday[st.weekday()] += secs
             by_project[s["project_id"]] = by_project.get(s["project_id"], 0) + secs
-        week0 = today - timedelta(days=today.weekday())
+        week0 = self.week_start_of(today)
         week_days = [week0 + timedelta(days=i) for i in range(7)]
         week_sessions = [s for s in sessions if s["started_at"][:10] >= week0.isoformat()]
         if week0 < d0:

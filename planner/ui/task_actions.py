@@ -30,6 +30,8 @@ class TaskActionsMixin:
             return self.projects_page.selected_task_id()
         if self.on_week():
             return self.week_page.selected_task_id()
+        if self.on_settings():
+            return None
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
         return item.data(Qt.UserRole) if item else None
@@ -121,7 +123,8 @@ class TaskActionsMixin:
             start_day = None if in_project else self.current
         dlg = TaskDialog(self, start_day, self.theme.c, prefill=prefill,
                          projects=self._project_choices(in_project), project_id=in_project,
-                         workday=self.store.workday(), span=span, store=self.store)
+                         workday=self.store.workday(), span=span, store=self.store,
+                         block_min=int(self.store.settings.get("block_minutes", 60) or 60))
         if dlg.exec():
             v = dlg.values()
             t = self.store.add(None, v["title"], note=v["note"], start_at=v["start_at"], end_at=v["end_at"],

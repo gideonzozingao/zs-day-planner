@@ -2,7 +2,7 @@
 import math
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
@@ -25,6 +25,7 @@ from .ui.quick_capture import QuickCapture
 from .ui.review_dialog import ReviewDialog
 from .ui.stats_dialog import StatsDialog
 from . import status as STATUS
+from . import timespan as TS
 from .ui.update_dialog import UpdateDialog
 from .updater import UpdateManager
 
@@ -97,6 +98,9 @@ class PlannerApp:
 
         self.window = MainWindow(self.store, self)
         self.store.on_unblocked = self._on_unblocked
+        QTimer.singleShot(4000, self.store.daily_backup)    # once a day, shortly after start
+        if self.store.restored:
+            QTimer.singleShot(800, lambda: self.window.snack("Restored your data from the backup you chose"))
         if not start_hidden:
             self.window.show()
 
@@ -161,7 +165,7 @@ class PlannerApp:
             self.show_updates()
         elif self._tray_msg == "review":
             self.show_review()
-        elif self._tray_msg in ("focus", "added"):
+        elif self._tray_msg in ("focus", "added", "reminder"):
             self.open_window()
 
     def show_updates(self):
@@ -310,16 +314,82 @@ class PlannerApp:
             self._last_recur_day = now.date()
             if self.store.ensure_recurrences(today=now.date()):
                 self.window.refresh()
+            self.store.daily_backup()                 # once a day, if enabled in Settings
         self._check_review(now)
         key = now.strftime("%Y-%m-%d %H:%M")
         if key == self.last_fired:
             return
-        starts = {t["start_at"] for t in self.store.for_day(now.date())
-                  if t["status"] not in STATUS.INACTIVE and not (t["id"] in self.snoozed and now < self.snoozed[t["id"]])}
+        s = self.store.settings
+        style = s.get("notify_style", "popup")
+        if style == "off":
+            return
+        lead = timedelta(minutes=int(s.get("notify_lead_min", 0) or 0))
+        due = {}
+        for t in self.store.for_day(now.date()) + self.store.for_day(now.date() + timedelta(days=1)):
+            if t["status"] in STATUS.INACTIVE or (t["id"] in self.snoozed and now < self.snoozed[t["id"]]):
+                continue
+            due.setdefault(TS.to_str(TS.to_dt(t["start_at"]) - lead), []).append(t)
         focusing = self.focus.active and not self.focus.paused   # hold back hourly nudges
-        if (now.minute == 0 and not focusing) or now.strftime("%Y-%m-%dT%H:%M") in starts:
+        starting = due.get(now.strftime("%Y-%m-%dT%H:%M"), [])
+        hourly = now.minute == 0 and not focusing and s.get("notify_hourly", True)
+        if hourly or starting:
             self.last_fired = key
+            self.notify(starting, lead)
+
+    def set_capture_hotkey(self, key):
+        """Re-register the global quick-add shortcut. Returns the one that worked (or None)."""
+        self.hotkey.unregister()
+        got = self.hotkey.register([key] + [k for k in ("Ctrl+Alt+Space", "Ctrl+Alt+N", "Ctrl+Shift+Space")
+                                            if k != key])
+        self.act_capture.setText(f"Quick add…\t{got}" if got else "Quick add…")
+        return got
+
+    def restart(self):
+        """Close and start again (used to finish restoring a backup). The new instance waits
+        a moment so this one has released the single-instance lock and the database."""
+        import os
+        import subprocess
+        frozen = getattr(sys, "frozen", False)
+        args = [sys.executable] + ([] if frozen else ["-m", "planner"])
+        if sys.platform == "win32":
+            q = lambda s: "'" + str(s).replace("'", "''") + "'"
+            cmd = f"Start-Sleep -Seconds 2; Start-Process -FilePath {q(args[0])}"
+            if args[1:]:
+                cmd += " -ArgumentList " + ",".join(q(a) for a in args[1:])
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", cmd],
+                             cwd=os.getcwd(), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import shlex
+            subprocess.Popen(["sh", "-c", "sleep 2; exec " + " ".join(shlex.quote(a) for a in args)],
+                             cwd=os.getcwd(), start_new_session=True)
+        self.quit()
+
+    def notify(self, starting=(), lead=timedelta(0)):
+        """Remind in the chosen style: the reminder card, a Windows notification, or both."""
+        style = self.store.settings.get("notify_style", "popup")
+        if style in ("popup", "both"):
             self.show_popup(force=False)
+        if style in ("toast", "both") and self.tray.isVisible():
+            from .numbering import titled
+            if starting:
+                mins = int(lead.total_seconds() // 60)
+                head = "Starting now" if not mins else f"Starting in {mins} min"
+                body = "\n".join(f"{TS.to_dt(t['start_at']):%H:%M}  {titled(t)}" for t in starting[:4])
+            else:
+                cur, over, up, _ = reminder_sections(self.store, datetime.now(), self.snoozed)
+                if not (cur or over or up):
+                    return
+                head = "Planner check-in"
+                parts = []
+                if cur:
+                    parts.append("Now: " + ", ".join(titled(t) for t in cur[:2]))
+                if over:
+                    parts.append(f"{len(over)} overdue")
+                if up:
+                    parts.append(f"Next: {TS.to_dt(up[0]['start_at']):%H:%M} {titled(up[0])}")
+                body = "\n".join(parts)
+            self._tray_msg = "reminder"
+            self.tray.showMessage(head, body, QSystemTrayIcon.Information, 8000)
 
     def _snooze_task(self, task, minutes):
         from datetime import timedelta
