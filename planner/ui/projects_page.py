@@ -22,6 +22,7 @@ from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from ..theme.icons import status_dot
+from .gantt import GanttView
 from .kanban import KanbanBoard
 from .stats_dialog import StatusBar
 from ..utils import fmt_duration, rgba
@@ -279,7 +280,8 @@ class ProjectsPage(QWidget):
         add_row.addSpacing(12)
         self.view_btns = {}
         for key, label, tip in (("list", "List", "Tasks and subtasks as a tree (Ctrl+Shift+L)"),
-                                ("board", "Board", "Kanban board: drag tasks between statuses (Ctrl+Shift+K)")):
+                                ("board", "Board", "Kanban board: drag tasks between statuses (Ctrl+Shift+K)"),
+                                ("timeline", "Timeline", "Gantt timeline: drag bars to reschedule (Ctrl+Shift+T)")):
             b = set_kind(QPushButton(label), "chip")
             b.setCheckable(True)
             b.setToolTip(tip)
@@ -328,6 +330,30 @@ class ProjectsPage(QWidget):
         self.board.activated.connect(lambda tid: self.host.edit_task())
         self.board.menuRequested.connect(lambda tid, pos: self._tree_menu(pos, None))
         lay.addWidget(self.board, 1)
+        # timeline (Gantt): zoom toolbar + chart
+        self.gantt_bar = QWidget()
+        gb = QHBoxLayout(self.gantt_bar)
+        gb.setContentsMargins(0, 0, 0, 0)
+        gb.setSpacing(6)
+        self.gantt_hint = set_role(QLabel("Drag a bar to move a task, drag its ends to change start or end. "
+                                          "Ctrl+wheel zooms."), "hint")
+        gb.addWidget(self.gantt_hint, 1)
+        for label, tip, fn in (("−", "Zoom out (−)", lambda: self.gantt.set_zoom(self.gantt.zoom - 1)),
+                               ("+", "Zoom in (+)", lambda: self.gantt.set_zoom(self.gantt.zoom + 1)),
+                               ("Fit", "Fit the project's start → finish", lambda: self.gantt.fit()),
+                               ("Today", "Scroll to today", lambda: self.gantt.scroll_to(datetime.now()))):
+            b = set_kind(QPushButton(label), "chip")
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(fn)
+            gb.addWidget(b)
+        lay.addWidget(self.gantt_bar)
+        self.gantt = GanttView()
+        self.gantt.spanChanged.connect(self._span_changed)
+        self.gantt.activated.connect(lambda tid: self.host.edit_task())
+        self.gantt.menuRequested.connect(lambda tid, pos: self._tree_menu(pos, None))
+        lay.addWidget(self.gantt, 1)
+        self._gantt_fitted = set()
         self.tree_empty = set_role(QLabel("No tasks yet. Type one above and press Enter,\n"
                                           "or press Ctrl+N to set its start and end."), "muted")
         self.tree_empty.setAlignment(Qt.AlignCenter)
@@ -349,8 +375,8 @@ class ProjectsPage(QWidget):
     def selected(self):
         """-> (kind, task_id, subtask_id) for the selected tree row or board card,
         or (None, None, None)."""
-        if self.view == "board":
-            tid = self.board.selected_id
+        if self.view in ("board", "timeline"):
+            tid = self.board.selected_id if self.view == "board" else self.gantt.selected_id
             return (TASK, tid, None) if tid else (None, None, None)
         it = self.tree.currentItem()
         data = it.data(0, Qt.UserRole) if it else None
@@ -373,11 +399,13 @@ class ProjectsPage(QWidget):
         self.store.settings["project_view"] = key
         self.store.save_settings()
         self.refresh(select=sel)
-        (self.board.focus_selected if key == "board" else self.tree.setFocus)()
+        self.focus_tasks()
 
     def focus_tasks(self):
         if self.view == "board":
             self.board.focus_selected()
+        elif self.view == "timeline":
+            self.gantt.setFocus()
         else:
             self.tree.setFocus()
 
@@ -475,6 +503,46 @@ class ProjectsPage(QWidget):
             f"<span style='color:{STATUS.color(st)}'>●</span> {counts[st]} {STATUS.label(st).lower()}"
             for st in STATUS.ORDER if counts[st]) or "No tasks yet")
 
+    def _fill_gantt(self, p, select):
+        tasks = self.store.project_tasks(p["id"])
+        if self.hide_done.isChecked():
+            tasks = [t for t in tasks if t["status"] not in (STATUS.DONE, STATUS.CANCELLED)]
+        self.tree.hide()
+        self.board.hide()
+        self.tree_empty.hide()
+        self.gantt_bar.show()
+        self.gantt.show()
+        self.gantt.set_tasks(p, tasks, self.host.theme.c, select=select)
+        if p["id"] not in self._gantt_fitted:          # first time this project is shown: fit it
+            self._gantt_fitted.add(p["id"])
+            QTimer.singleShot(0, self.gantt.fit)
+
+    def _span_changed(self, tid, sa, ea):
+        t = self.store.find(tid)
+        if not t:
+            return
+        old = (t["start_at"], t["end_at"])
+        self.store.update(tid, start_at=sa, end_at=ea)
+
+        def undo():
+            self.store.update(tid, start_at=old[0], end_at=old[1])
+            return tid
+        self.host._push_undo("reschedule", undo)
+        self.refresh(select=tid)
+        p = self.project()
+        warn = ""
+        if p and TS.to_str(ea) > p["end_at"]:
+            warn = "  ·  past the project's finish"
+        self.host.snack(f"{NUM.titled(t)[:32]}: {TS.span_label(sa, ea)}{warn}", "Undo", self.host.undo)
+
+    def shift_days(self, days):
+        """Timeline keyboard move: shift the selected task by whole days."""
+        tid = self.gantt.selected_id
+        t = self.store.find(tid) if tid else None
+        if t:
+            delta = timedelta(days=days)
+            self._span_changed(tid, TS.to_dt(t["start_at"]) + delta, TS.to_dt(t["end_at"]) + delta)
+
     def _fill_board(self, p, select):
         tasks = self.store.project_tasks(p["id"])
         self.board.set_tasks(tasks, self.host.theme.c, hide_done=self.hide_done.isChecked(),
@@ -516,7 +584,10 @@ class ProjectsPage(QWidget):
             self.host.task_done_changed(tid)
 
     def move_card(self, delta):
-        """Keyboard alternative to dragging: move the selected card one column left/right."""
+        """Keyboard alternative to dragging: on the board, move the selected card one column
+        left/right; on the timeline, move the selected task a day earlier/later."""
+        if self.view == "timeline":
+            return self.shift_days(delta)
         if self.view != "board" or not self.board.selected_id:
             return
         st = self.board.neighbour_status(self.board.selected_id, delta)
@@ -524,6 +595,10 @@ class ProjectsPage(QWidget):
             self._board_moved(self.board.selected_id, st, "")
 
     def _fill_tree(self, p, now, select):
+        if self.view == "timeline":
+            return self._fill_gantt(p, select)
+        self.gantt_bar.hide()
+        self.gantt.hide()
         if self.view == "board":
             return self._fill_board(p, select)
         self.board.hide()
@@ -866,9 +941,11 @@ class ProjectsPage(QWidget):
             self.host._push_undo("delete", lambda t=snapshot: (self.store.restore(t), t["id"])[1])
             if self.view == "board":
                 self.board.selected_id = None
+            elif self.view == "timeline":
+                self.gantt.selected_id = None
             self.refresh()
             n = self.tree.topLevelItemCount()
-            if n and self.view != "board":
+            if n and self.view == "list":
                 self.tree.setCurrentItem(self.tree.topLevelItem(min(max(row, 0), n - 1)))
             self.host.snack(f"Deleted “{task['title']}”", "Undo", self.host.undo)
 
@@ -962,6 +1039,9 @@ class ProjectsPage(QWidget):
             idx = order.index(task["id"]) if task["id"] in order else -1
             up.setEnabled(idx > 0)
             down.setEnabled(0 <= idx < len(order) - 1)
+            if self.view == "timeline":
+                add("Move a day earlier", lambda: self.shift_days(-1), None, "Ctrl+Shift+←")
+                add("Move a day later", lambda: self.shift_days(1), None, "Ctrl+Shift+→")
             if self.view == "board":
                 left = self.board.neighbour_status(task["id"], -1)
                 right = self.board.neighbour_status(task["id"], 1)
