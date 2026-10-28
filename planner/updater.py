@@ -1,6 +1,6 @@
 """Self-update: check the update feed, download + verify the installer, install silently.
 
-Feed: https://github.com/<repo>/releases/download/update-feed/<channel>.json, a manifest
+Feed: https://github.com/gideonzozingao/zs-day-planner/releases/download/update-feed/<channel>.json, a manifest
 published by CI (scripts/make_manifest.py). Plain release downloads are not subject to
 GitHub's 60-requests/hour API limit, which matters when many PCs share one office IP.
 If the feed doesn't exist yet, the GitHub Releases API is used as a fallback.

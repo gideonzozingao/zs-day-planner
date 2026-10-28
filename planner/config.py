@@ -1,7 +1,7 @@
 """App-wide constants, paths and defaults."""
 from pathlib import Path
 
-APP_NAME = "Zuqongtech Daily Planner"
+APP_NAME = "Zuqogsof Day Planner"
 LOOKAHEAD_MIN = 180              # reminder popup looks this far ahead
 REMINDER_TICK_MS = 15_000        # how often the reminder timer checks
 
@@ -106,7 +106,7 @@ INSTANCE_KEY = "zuqongtech-daily-planner"         # single-instance local socket
 LOG_FILE = DATA_DIR / "planner.log"
 
 # --- updates (GitHub Releases is the update channel)
-UPDATE_REPO = "gideonzozingao/zuqongtech-daily-planner"   # owner/repo that publishes releases
+UPDATE_REPO = "gideonzozingao/zs-day-plannerr"   # owner/repo that publishes releases
 UPDATE_ASSET_PATTERN = r"ZuqongtechPlanner-Setup-.+\.exe"
 UPDATE_FIRST_CHECK_MS = 20_000                             # after start-up
 UPDATE_CHECK_EVERY_MS = 6 * 60 * 60 * 1000                 # then every 6 hours
