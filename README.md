@@ -12,20 +12,26 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   times (`2pm`, `14:00-15:30`, `at 3`, `for 45m`), `#tags`, `!high` / `!low` and `*`
   (top task) are understood. Put text in "quotes" to keep it literal. The main window's
   quick-add box uses the same parser.
+
 - **Focus timer**: `Ctrl+F` on a task (or right-click → Focus). It defaults to the rest of the
   task's time block, otherwise 25 min. The tray icon shows a countdown ring, hourly reminders
   are held back while you focus, and time spent is logged per task (`⏱ 45m`).
+
 - **End-of-day review**: prompted at your routine's _Wrap-up_ time (or `Ctrl+E`). It has three
   steps: see what got done; move unfinished tasks to the next working day (routine blocks
   excluded); plan that day and star up to 3 top tasks.
+
 - **Snooze reminders**: the reminder popup has _Remind me in 5 / 15 / 60 min_ and _Start now_
   (which begins a focus session) alongside _Got it_.
+
 - **Coloured tags with a filter**: tags get colours (auto, or right-click a filter chip to pick).
   The filter bar above the list narrows to one project at a time (#dpp, #autolense, #nastel…).
+
 - **Repeating tasks**: set a task to repeat daily, on weekdays, weekly or monthly in the task
   dialog's _Repeat_ field, or the right-click _Repeat_ menu. Occurrences are created ahead
   automatically; editing or deleting one occurrence leaves the rest alone, and _Delete whole
   series_ removes them all. This is separate from the routine.
+
 - **Start and end date-time on everything**: every task has a start and an end date-time, and
   a task can run over several days (it then shows on each day it covers, e.g.
   `14:00 → Thu 10:00`, `All day (Tue → Thu)`). The task dialog has _Starts_ / _Ends_ pickers,
@@ -33,6 +39,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   _+1 day_. A task typed without a time (quick add, quick capture) spans the working day,
   which is taken from your routine (first block's start to last block's end; 08:00–16:30 by
   default).
+
 - **Projects** (`Ctrl+J`): group work as _project → tasks → subtasks_. Each project has a
   colour, a start and finish date-time (both required) and a status (Planned / Active /
   On hold / Done). The project page shows progress (subtasks count toward it), time left or
@@ -44,6 +51,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   chip bar, or right-click a tag chip → _Convert #tag to a project_.
   Keys in the project tree: `Insert` add subtask, `Space` toggle, `Enter` edit/rename,
   `Alt+↑/↓` reorder, `Delete` delete (undoable), `Ctrl+Shift+N` new project.
+
 - **Timeline (Gantt)** per project (`Ctrl+Shift+T`, or _Timeline_ next to List/Board): one row
   per task, bars from start to end (filled in by subtask progress, coloured by status), the
   project's start and finish as dashed lines, a red today line, weekends shaded, and a
@@ -51,6 +59,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   hatched red. Drag a bar to move the task, drag its ends to change start or end (snaps to
   days zoomed out, hours zoomed in); `Ctrl+Shift+←/→` moves the selected task a day.
   Zoom with `Ctrl+wheel`, `+`/`−`, _Fit_ and _Today_. Every change is undoable.
+
 - **Week planner** (_Week_ on the rail, `Ctrl+Shift+W`): the week as day columns with hours
   down the side, like Outlook. Whole-day and multi-day tasks sit in the _all day_ band; time
   blocks sit in the grid (overlaps side by side), with working hours, today and the current
@@ -59,6 +68,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   them, drag a block's bottom edge to change its end, drag onto the all-day band to make it a
   whole working day again. Double-click an empty slot for a new task at that time.
   `Alt+←/→` changes week; _Work week_ / _7 days_.
+
 - **Kanban board** for project tasks: switch a project between **List** and **Board**
   (`Ctrl+Shift+L` / `Ctrl+Shift+K`; the choice is remembered). The board has one column per
   status; drag a card to another column to change its status, or up/down to change its
@@ -67,6 +77,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   when overdue), subtask progress, tags and focus time. Keyboard: `Ctrl+Shift+←/→` moves the
   selected card to the previous/next column; Space, Enter, Delete, Insert, `Ctrl+I` work as
   in the list. _Hide completed_ hides the Done and Cancelled columns.
+
 - **Automatic numbering**: tasks in a project are numbered `#1`, `#2`, … as they're created
   (shown before the title everywhere: project tree, day view, reminders, copy text), and every
   task's subtasks are numbered as they're added, shown as `9.1`, `9.2` under task `#9`.
@@ -76,6 +87,7 @@ Material 3 tray planner: projects, tasks with subtasks, reminders, routine, SQLi
   (undoable). The task dialog shows the number, or _will be #n_ for a new task.
   On upgrade, project tasks whose title already started with a typed `#12 ` keep 12 as their
   number and the typed prefix is removed from the title.
+
 - **Task status**: every task has a status with its own colour, shown as a pill in the list:
   Open, In progress, Done, Postponed, Cancelled, Blocked. Set it from the task dialog, the
   right-click _Status_ menu, or cycle Open → In progress → Done with **Ctrl+I**. The Done
