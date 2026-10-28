@@ -36,12 +36,16 @@ class SubtaskLineEdit(QLineEdit):
 
 
 class SubtaskRow(QWidget):
-    def __init__(self, item, remove_icon):
+    def __init__(self, item, remove_icon, label=""):
+        """label: the subtask's number as shown (e.g. '9.2'); empty for a row not saved yet."""
         super().__init__()
         self.sid = item.get("id")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 0, 0, 0)
         lay.setSpacing(8)
+        self.num = set_role(QLabel(label), "hint")
+        self.num.setMinimumWidth(30)
+        self.num.setToolTip("Subtask number (given automatically)" if label else "Numbered when you save")
         self.check = QCheckBox()
         self.check.setToolTip("Mark subtask done")
         self.check.setChecked(bool(item.get("done")))
@@ -58,6 +62,7 @@ class SubtaskRow(QWidget):
         self.remove.setToolTip("Remove subtask")
         self.remove.setCursor(Qt.PointingHandCursor)
         self.remove.setFocusPolicy(Qt.NoFocus)
+        lay.addWidget(self.num)
         lay.addWidget(self.check)
         lay.addWidget(self.edit, 1)
         lay.addWidget(self.remove)
@@ -75,8 +80,10 @@ class SubtaskRow(QWidget):
 class SubtaskEditor(QFrame):
     changed = Signal()
 
-    def __init__(self, colors, items=()):
+    def __init__(self, colors, items=(), task=None):
+        """task: the task being edited (for '9.2'-style labels); None for a new task."""
         super().__init__()
+        self._task = task
         self.setObjectName("subtaskCard")
         self.setAttribute(Qt.WA_StyledBackground)
         self._remove_icon = make_icon("close", colors["onSurfaceVariant"])
@@ -127,7 +134,8 @@ class SubtaskEditor(QFrame):
         return [self.rows.itemAt(i).widget() for i in range(self.rows.count())]
 
     def _append(self, item, index=-1, focus=False, update=True):
-        row = SubtaskRow(item, self._remove_icon)
+        from ..numbering import sub_no
+        row = SubtaskRow(item, self._remove_icon, sub_no(self._task, item) if item.get("id") else "")
         row.check.toggled.connect(self._update)
         row.edit.textChanged.connect(self.changed)
         row.edit.returnPressed.connect(self.add_edit.setFocus)

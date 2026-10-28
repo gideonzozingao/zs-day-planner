@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
 from ..focus import PRESETS, default_minutes
 from .. import recurrence as R
+from .. import numbering as NUM
 from .. import status as STATUS
 from ..theme.icons import status_dot
 from ..quickparse import HIGH, LOW, NORMAL, PRIORITY_NAMES, parse
@@ -304,8 +305,8 @@ class TaskActionsMixin:
         if not task:
             return
         when = span_label(task["start_at"], task["end_at"]) + "  "
-        lines = [f"{when}{task['title']}" + (f" — {task['note']}" if task["note"] else "")]
-        lines += [f"  [{'x' if s['done'] else ' '}] {s['title']}" for s in self.store.subtasks(task["id"])]
+        lines = [f"{when}{NUM.titled(task)}" + (f" — {task['note']}" if task["note"] else "")]
+        lines += [f"  [{'x' if s['done'] else ' '}] {NUM.sub_titled(task, s)}" for s in self.store.subtasks(task["id"])]
         QGuiApplication.clipboard().setText("\n".join(lines))
         self.snack("Copied to clipboard")
 
@@ -410,7 +411,7 @@ class TaskActionsMixin:
         title = f"Subtasks ({task['sub_done']}/{task['sub_total']})" if subs else "Subtasks"
         sm = menu.addMenu(self._icon("checklist"), title)
         for s in subs:
-            a = QAction(s["title"].replace("&", "&&"), sm)
+            a = QAction(NUM.sub_titled(task, s).replace("&", "&&"), sm)
             a.setCheckable(True)
             a.setChecked(s["done"])
             a.toggled.connect(lambda checked, tid=task["id"], sid=s["id"]: self.toggle_subtask(tid, sid, checked))

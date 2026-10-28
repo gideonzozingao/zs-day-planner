@@ -20,6 +20,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 from .. import recurrence as R
+from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from pathlib import Path
@@ -31,7 +32,7 @@ from .schema import (
     TASK_COLUMNS, TASK_SELECT,
 )
 
-TASK_ORDER = " ORDER BY t.start_at, t.end_at, t.title COLLATE NOCASE"
+TASK_ORDER = " ORDER BY t.start_at, t.end_at, t.project_id, t.number, t.title COLLATE NOCASE"
 PROJECT_TASK_ORDER = " ORDER BY t.project_pos, t.created_at"
 
 
@@ -78,6 +79,7 @@ class Store:
         self._migrate()                         # add v3 columns to an older tasks table first
         self.db.executescript(SCHEMA)          # then create anything missing
         self._backfill_spans()                 # v6: give older rows a start/end date-time
+        self._backfill_numbers()               # v8: number project tasks and all subtasks
         self.db.executescript(
             "CREATE TABLE IF NOT EXISTS recur_skips (series TEXT NOT NULL, day TEXT NOT NULL, "
             "PRIMARY KEY (series, day));"
@@ -107,6 +109,8 @@ class Store:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
                     if (table, column) in ON_COLUMN_ADDED:
                         self.db.execute(ON_COLUMN_ADDED[(table, column)])
+                    if (table, column) == ("tasks", "number"):
+                        self._adopt_manual_numbers = True
 
     def workday(self):
         """(start, end) HH:MM of the working day: first to last routine block, else 08:00-16:30.
@@ -200,27 +204,112 @@ class Store:
         self.db.execute(
             f"{mode} INTO tasks (id, date, start_time, end_time, title, note, done, "
             f"created_at, updated_at, completed_at, priority, tags, pinned, recurrence, recur_parent, "
-            f"project_id, project_pos, start_at, end_at, status) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"project_id, project_pos, start_at, end_at, status, number, sub_seq) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (t["id"], sa.date().isoformat(), f"{sa:%H:%M}", f"{ea:%H:%M}", t["title"], t["note"],
              int(bool(t["done"])),
              t["created_at"], t["updated_at"], t["completed_at"], int(t.get("priority", 1)),
              t.get("tags", ""), int(bool(t.get("pinned"))), t.get("recurrence", ""),
              t.get("recur_parent", ""), t.get("project_id", "") or "", int(t.get("project_pos", 0) or 0),
-             TS.to_str(sa), TS.to_str(ea), STATUS.normalize(t.get("status", "open"), t.get("done"))))
+             TS.to_str(sa), TS.to_str(ea), STATUS.normalize(t.get("status", "open"), t.get("done")),
+             int(t.get("number", 0) or 0), int(t.get("sub_seq", 0) or 0)))
 
     def _insert_subtask(self, tid, position, title, done, created_at=None, completed_at=None,
-                        sid=None, mode="INSERT"):
+                        sid=None, mode="INSERT", number=None):
+        """number=None hands out the task's next subtask number; restores pass the old one."""
         sid = sid or uuid.uuid4().hex
         stamp = now_stamp()
         if completed_at is None and done:
             completed_at = stamp
+        if number is None:
+            number = self._next_sub_no(tid)
+        else:
+            self.db.execute("UPDATE tasks SET sub_seq = MAX(sub_seq, ?) WHERE id = ?", (number, tid))
         self.db.execute(
-            f"{mode} INTO subtasks (id, task_id, position, title, done, created_at, completed_at) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+            f"{mode} INTO subtasks (id, task_id, position, title, done, created_at, completed_at, number) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (sid, tid, position, title, int(bool(done)), created_at or stamp,
-             completed_at if done else None))
+             completed_at if done else None, int(number)))
         return sid
+
+    # ------------------------------------------------------------------ numbering
+    def _next_sub_no(self, tid) -> int:
+        self.db.execute("UPDATE tasks SET sub_seq = sub_seq + 1 WHERE id = ?", (tid,))
+        r = self.db.execute("SELECT sub_seq FROM tasks WHERE id = ?", (tid,)).fetchone()
+        return r[0] if r else 1
+
+    def _next_task_no(self, pid) -> int:
+        """Next #n in a project. Never reuses a number, even after deletes."""
+        if not pid:
+            return 0
+        self.db.execute("UPDATE projects SET task_seq = MAX(task_seq, "
+                        "(SELECT COALESCE(MAX(number), 0) FROM tasks WHERE project_id = ?)) + 1 WHERE id = ?",
+                        (pid, pid))
+        r = self.db.execute("SELECT task_seq FROM projects WHERE id = ?", (pid,)).fetchone()
+        return r[0] if r else 0
+
+    def _backfill_numbers(self):
+        """Give unnumbered project tasks and subtasks a number. The first time (when the column
+        is added) titles already starting with a hand-typed '#12 ' keep 12 as their number and
+        lose the prefix, so they don't read '#12 #12 …'."""
+        adopt = getattr(self, "_adopt_manual_numbers", False)
+        self._adopt_manual_numbers = False
+        need_t = self.db.execute("SELECT 1 FROM tasks WHERE project_id != '' AND number = 0 LIMIT 1").fetchone()
+        need_s = self.db.execute("SELECT 1 FROM subtasks WHERE number = 0 LIMIT 1").fetchone()
+        if not (need_t or need_s or adopt):
+            return
+        with self.db:
+            for p in self.db.execute("SELECT id FROM projects").fetchall():
+                rows = self.db.execute("SELECT id, title, number FROM tasks WHERE project_id = ? "
+                                       "ORDER BY project_pos, created_at", (p["id"],)).fetchall()
+                used = {r["number"] for r in rows if r["number"]}
+                pending = []
+                for r in rows:
+                    if r["number"]:
+                        continue
+                    n, title = NUM.split_manual(r["title"]) if adopt else (None, r["title"])
+                    if n and n not in used:
+                        used.add(n)
+                        self.db.execute("UPDATE tasks SET number = ?, title = ? WHERE id = ?", (n, title, r["id"]))
+                    else:
+                        pending.append(r["id"])
+                nxt = max(used, default=0)
+                for tid in pending:
+                    nxt += 1
+                    self.db.execute("UPDATE tasks SET number = ? WHERE id = ?", (nxt, tid))
+                self.db.execute("UPDATE projects SET task_seq = MAX(task_seq, ?) WHERE id = ?", (nxt, p["id"]))
+            for t in self.db.execute("SELECT DISTINCT task_id FROM subtasks WHERE number = 0").fetchall():
+                subs = self.db.execute("SELECT id, number FROM subtasks WHERE task_id = ? ORDER BY position",
+                                       (t[0],)).fetchall()
+                n = max((s["number"] for s in subs), default=0)
+                for s in subs:
+                    if not s["number"]:
+                        n += 1
+                        self.db.execute("UPDATE subtasks SET number = ? WHERE id = ?", (n, s["id"]))
+                self.db.execute("UPDATE tasks SET sub_seq = MAX(sub_seq, ?) WHERE id = ?", (n, t[0]))
+
+    def renumber_project(self, pid):
+        """Number the project's tasks 1..n in their current order and each task's subtasks 1..m
+        in checklist order. Returns a snapshot for restore_numbers()."""
+        snap = {"pid": pid, "seq": self.project(pid)["task_seq"], "tasks": [], "subs": []}
+        with self.db:
+            for i, t in enumerate(self.project_tasks(pid), start=1):
+                snap["tasks"].append((t["id"], t["number"], t["sub_seq"]))
+                subs = self.subtasks(t["id"])
+                for j, s in enumerate(subs, start=1):
+                    snap["subs"].append((s["id"], s["number"]))
+                    self.db.execute("UPDATE subtasks SET number = ? WHERE id = ?", (j, s["id"]))
+                self.db.execute("UPDATE tasks SET number = ?, sub_seq = ? WHERE id = ?", (i, len(subs), t["id"]))
+            self.db.execute("UPDATE projects SET task_seq = ? WHERE id = ?", (len(snap["tasks"]), pid))
+        return snap
+
+    def restore_numbers(self, snap):
+        with self.db:
+            for tid, n, seq in snap["tasks"]:
+                self.db.execute("UPDATE tasks SET number = ?, sub_seq = ? WHERE id = ?", (n, seq, tid))
+            for sid, n in snap["subs"]:
+                self.db.execute("UPDATE subtasks SET number = ? WHERE id = ?", (n, sid))
+            self.db.execute("UPDATE projects SET task_seq = ? WHERE id = ?", (snap["seq"], snap["pid"]))
 
     def _sync_subtasks(self, tid, items, quiet=False) -> bool:
         """Make the task's subtasks match `items` (list of {id?, title, done}) in that order.
@@ -299,6 +388,8 @@ class Store:
                 "recur_parent": row["recur_parent"] if "recur_parent" in keys else "",
                 "project_id": row["project_id"] if "project_id" in keys else "",
                 "project_pos": row["project_pos"] if "project_pos" in keys else 0,
+                "number": row["number"] if "number" in keys else 0,
+                "sub_seq": row["sub_seq"] if "sub_seq" in keys else 0,
                 "status": STATUS.normalize(row["status"] if "status" in keys else "open", bool(row["done"])),
                 "sub_total": row["sub_total"] if "sub_total" in keys else 0,
                 "sub_done": row["sub_done"] if "sub_done" in keys else 0,
@@ -312,7 +403,8 @@ class Store:
     def _sub(row):
         return {"id": row["id"], "task_id": row["task_id"], "position": row["position"],
                 "title": row["title"], "done": bool(row["done"]),
-                "created_at": row["created_at"], "completed_at": row["completed_at"]}
+                "created_at": row["created_at"], "completed_at": row["completed_at"],
+                "number": row["number"] if "number" in row.keys() else 0}
 
     # ------------------------------------------------------------ settings & routine
     def save_settings(self):
@@ -399,6 +491,7 @@ class Store:
              "project_pos": self._next_project_pos(project_id) if project_id else 0, "status": status}
         n = sum(1 for s in subtasks or [] if (s.get("title") or "").strip())
         with self.db:
+            t["number"] = self._next_task_no(project_id)      # #n in its project (0 outside one)
             self._insert_task(t)
             if n:
                 self._sync_subtasks(t["id"], subtasks, quiet=True)
@@ -473,6 +566,10 @@ class Store:
         if "project_id" in new and "project_pos" not in new and new["project_id"]:
             sets.append("project_pos = ?")
             vals.append(self._next_project_pos(new["project_id"]))
+        if "project_id" in new and "number" not in new:
+            # a task joining a project gets that project's next number; leaving one drops it
+            sets.append("number = ?")
+            vals.append(self._next_task_no(new["project_id"]) if new["project_id"] else 0)
         with self.db:
             self.db.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", (*vals, tid))
             if span_changed:
@@ -546,7 +643,8 @@ class Store:
             self._insert_task(dict(t, updated_at=now_stamp()), mode="INSERT OR IGNORE")
             for s in t.get("subtasks", []):
                 self._insert_subtask(t["id"], s["position"], s["title"], s["done"], s["created_at"],
-                                     s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE")
+                                     s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE",
+                                     number=s.get("number"))
             self._log(t["id"], "restored")
 
     def series_parent(self, t):
@@ -882,7 +980,7 @@ class Store:
     def restore_subtask(self, s):
         with self.db:
             self._insert_subtask(s["task_id"], s["position"], s["title"], s["done"], s["created_at"],
-                                 s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE")
+                                 s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE", number=s.get("number"))
             self._log(s["task_id"], "subtask added", s["title"])
 
     def delete_project(self, pid, with_tasks=False):
@@ -900,7 +998,7 @@ class Store:
                     self.db.execute("DELETE FROM tasks WHERE id = ?", (t["id"],))
                     self._log(t["id"], "deleted", f"with project {p['name']}")
                 else:
-                    self.db.execute("UPDATE tasks SET project_id = '', project_pos = 0 WHERE id = ?",
+                    self.db.execute("UPDATE tasks SET project_id = '', project_pos = 0, number = 0 WHERE id = ?",
                                     (t["id"],))
                     self._log(t["id"], "project", f"project {p['name']} deleted")
                 snap["tasks"].append(t)
@@ -918,18 +1016,19 @@ class Store:
                     self._insert_task(t, mode="INSERT OR IGNORE")
                     for s in t.get("subtasks", []):
                         self._insert_subtask(t["id"], s["position"], s["title"], s["done"], s["created_at"],
-                                             s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE")
+                                             s["completed_at"], sid=s["id"], mode="INSERT OR IGNORE",
+                                             number=s.get("number"))
                     self._log(t["id"], "restored")
                 else:
-                    self.db.execute("UPDATE tasks SET project_id = ?, project_pos = ? WHERE id = ?",
-                                    (p["id"], t["project_pos"], t["id"]))
+                    self.db.execute("UPDATE tasks SET project_id = ?, project_pos = ?, number = ? WHERE id = ?",
+                                    (p["id"], t["project_pos"], t.get("number", 0), t["id"]))
 
     def tag_to_project(self, tag, color=""):
         """Make a project from a tag: every task carrying it joins the project and loses the tag.
         Returns (project, undo snapshot)."""
         tag = tag.lower().lstrip("#")
         rows = [r for r in self.db.execute(
-            "SELECT id, start_at, end_at, tags, project_id FROM tasks ORDER BY start_at")
+            "SELECT id, start_at, end_at, tags, project_id, number FROM tasks ORDER BY start_at")
             if tag in r["tags"].split()]
         p = self.add_project(tag, color=color or self.tag_colors().get(tag, ""),
                              start_at=min(r["start_at"] for r in rows) if rows else None,
@@ -937,18 +1036,20 @@ class Store:
         snap = {"project_id": p["id"], "tasks": []}
         with self.db:
             for pos, r in enumerate(rows):
-                snap["tasks"].append({"id": r["id"], "tags": r["tags"], "project_id": r["project_id"]})
+                snap["tasks"].append({"id": r["id"], "tags": r["tags"], "project_id": r["project_id"],
+                                      "number": r["number"]})
                 tags = " ".join(x for x in r["tags"].split() if x != tag)
-                self.db.execute("UPDATE tasks SET project_id = ?, project_pos = ?, tags = ?, updated_at = ? "
-                                "WHERE id = ?", (p["id"], pos, tags, now_stamp(), r["id"]))
+                self.db.execute("UPDATE tasks SET project_id = ?, project_pos = ?, tags = ?, number = ?, "
+                                "updated_at = ? WHERE id = ?",
+                                (p["id"], pos, tags, self._next_task_no(p["id"]), now_stamp(), r["id"]))
                 self._log(r["id"], "project", f"→ {p['name']} (from #{tag})")
         return p, snap
 
     def undo_tag_to_project(self, snap):
         with self.db:
             for t in snap["tasks"]:
-                self.db.execute("UPDATE tasks SET project_id = ?, tags = ? WHERE id = ?",
-                                (t["project_id"], t["tags"], t["id"]))
+                self.db.execute("UPDATE tasks SET project_id = ?, tags = ?, number = ? WHERE id = ?",
+                                (t["project_id"], t["tags"], t.get("number", 0), t["id"]))
             self.db.execute("DELETE FROM projects WHERE id = ?", (snap["project_id"],))
 
     # ------------------------------------------------------------------ status & stats

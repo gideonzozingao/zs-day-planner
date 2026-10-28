@@ -15,6 +15,7 @@ from ..quickparse import describe, parse
 from ..theme.icons import make_icon
 from ..timespan import span_label
 from .. import status as STATUS
+from .. import numbering as NUM
 from ..utils import fmt_duration
 from .dialogs import FadeDialog
 from .helpers import set_kind, set_role
@@ -156,7 +157,7 @@ class ReviewDialog(FadeDialog):
             box.setSpacing(4)
             for t in done:
                 extra = f"   ·  {fmt_duration(t['focus_seconds'])} focused" if t["focus_seconds"] >= 60 else ""
-                lbl = QLabel(f"✓  {t['title']}{extra}")
+                lbl = QLabel(f"✓  {NUM.titled(t)}{extra}")
                 lbl.setTextFormat(Qt.PlainText)
                 box.addWidget(lbl)
             box.addStretch()
@@ -213,7 +214,7 @@ class ReviewDialog(FadeDialog):
             is_routine = (t["title"], t["start"]) in routine
             r = QHBoxLayout()
             when = span_label(t["start_at"], t["end_at"], self.today) + "  "
-            cb = QCheckBox(f"{when}{t['title']}".replace("&", "&&") + ("   · routine" if is_routine else ""))
+            cb = QCheckBox(f"{when}{NUM.titled(t)}".replace("&", "&&") + ("   · routine" if is_routine else ""))
             cb.setChecked(not is_routine)
             self.carry[t["id"]] = cb
             done_btn = QPushButton("Mark done")
@@ -290,7 +291,7 @@ class ReviewDialog(FadeDialog):
             star.toggled.connect(self._stars_changed)
             self.stars[t["id"]] = star
             when = span_label(t["start_at"], t["end_at"], d)
-            title = QLabel(t["title"])
+            title = QLabel(NUM.titled(t))
             title.setTextFormat(Qt.PlainText)
             r.addWidget(star)
             r.addWidget(title, 1)

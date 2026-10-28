@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from ..config import APP_NAME
 from .. import recurrence as R
+from .. import numbering as NUM
 from .. import status as STATUS
 from ..theme.icons import status_dot
 from ..theme import app_icon, make_icon, on_color
@@ -518,7 +519,8 @@ class MainWindow(QMainWindow, TaskActionsMixin):
             extras.append(f"✓ {t['sub_done']}/{t['sub_total']}")
         if t["focus_seconds"] >= 60:
             extras.append(f"⏱ {fmt_duration(t['focus_seconds'])}")
-        return prefix + t["title"] + ("   " + "   ".join(extras) if extras else "")
+        no = NUM.task_no(t)
+        return (f"{no}  " if no else "") + prefix + t["title"] + ("   " + "   ".join(extras) if extras else "")
 
     def _tooltip(self, t, subs):
         length = (to_dt(t["end_at"]) - to_dt(t["start_at"])).total_seconds()
@@ -534,7 +536,7 @@ class MainWindow(QMainWindow, TaskActionsMixin):
         if t["focus_seconds"]:
             tip += f"\nFocused: {fmt_duration(t['focus_seconds'])}"
         if subs:
-            tip += "\n\nSubtasks:\n" + "\n".join(("☑ " if s["done"] else "☐ ") + s["title"] for s in subs)
+            tip += "\n\nSubtasks:\n" + "\n".join(("☑ " if s["done"] else "☐ ") + NUM.sub_titled(t, s) for s in subs)
         return tip
 
     def refresh(self, select=None):

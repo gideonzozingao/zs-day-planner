@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..data.schema import PROJECT_STATUS_NAMES, PROJECT_STATUSES
 from ..quickparse import HIGH, LOW, describe, parse
+from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from ..theme.icons import status_dot
@@ -303,6 +304,7 @@ class ProjectsPage(QWidget):
         t.setContextMenuPolicy(Qt.CustomContextMenu)
         t.customContextMenuRequested.connect(lambda pos: self._tree_menu(t.viewport().mapToGlobal(pos),
                                                                          t.itemAt(pos)))
+        t.itemDelegate().closeEditor.connect(lambda *_: QTimer.singleShot(0, self.refresh))
         self.tree = t
         self._collapsed = set()
         lay.addWidget(t, 1)
@@ -451,7 +453,8 @@ class ProjectsPage(QWidget):
             it.setCheckState(0, Qt.Checked if task["done"] else Qt.Unchecked)
             prefix = ("◉ " if self.host.app.focus.is_on(task["id"]) else "") + ("★ " if task["pinned"] else "") \
                 + ("⚑ " if task["priority"] == HIGH else "") + ("⟳ " if task["recurrence"] else "")
-            it.setText(0, prefix + task["title"])
+            no = NUM.task_no(task)
+            it.setText(0, (f"{no}   " if no else "") + prefix + task["title"])
             st = task["status"]
             it.setText(1, STATUS.label(st))
             it.setIcon(1, status_dot(STATUS.color(st)))
@@ -495,7 +498,8 @@ class ProjectsPage(QWidget):
                 ch.setData(0, Qt.UserRole, (SUB, task["id"], s["id"]))
                 ch.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
                 ch.setCheckState(0, Qt.Checked if s["done"] else Qt.Unchecked)
-                ch.setText(0, s["title"])
+                ch.setText(0, NUM.sub_titled(task, s))
+                ch.setData(0, Qt.UserRole + 1, s["title"])        # plain title, for in-place rename
                 f = ch.font(0)
                 f.setStrikeOut(s["done"])
                 ch.setFont(0, f)
@@ -544,6 +548,7 @@ class ProjectsPage(QWidget):
         if item:
             self.list.setCurrentItem(item)
             act(menu, "Edit project…", self.edit_project, "edit")
+            act(menu, "Renumber tasks…", self.renumber, "checklist")
             sm = menu.addMenu("Status")
             p = self.project()
             for s in PROJECT_STATUSES:
@@ -670,9 +675,16 @@ class ProjectsPage(QWidget):
     def _double_clicked(self, item, column):
         kind, tid, sid = self.selected()
         if kind == SUB:
-            self.tree.editItem(item, 0)
+            self._edit_sub(item)
         elif kind == TASK:
             self.host.edit_task()
+
+    def _edit_sub(self, item):
+        """Rename a subtask in place: the editor shows just its title, not the 9.2 label."""
+        self.tree.blockSignals(True)
+        item.setText(0, item.data(0, Qt.UserRole + 1) or item.text(0))
+        self.tree.blockSignals(False)
+        self.tree.editItem(item, 0)
 
     def _item_changed(self, item, column):
         data = item.data(0, Qt.UserRole)
@@ -709,9 +721,25 @@ class ProjectsPage(QWidget):
     def edit_current(self):
         kind, tid, sid = self.selected()
         if kind == SUB:
-            self.tree.editItem(self.tree.currentItem(), 0)
+            self._edit_sub(self.tree.currentItem())
         elif kind == TASK:
             self.host.edit_task()
+
+    def renumber(self):
+        p = self.project()
+        if not p:
+            return
+        ans = QMessageBox.question(
+            self.host, "Renumber tasks",
+            f"Number the tasks in “{p['name']}” #1, #2, … in their current order, and each task's "
+            f"subtasks 1, 2, … in checklist order?\n\nNumbers you've shared elsewhere will change. "
+            f"Ctrl+Z undoes this.")
+        if ans != QMessageBox.Yes:
+            return
+        snap = self.store.renumber_project(p["id"])
+        self.host._push_undo("renumber", lambda s=snap: self.store.restore_numbers(s))
+        self.refresh()
+        self.host.snack(f"Renumbered {len(snap['tasks'])} task(s)", "Undo", self.host.undo)
 
     def add_subtask(self):
         kind, tid, _ = self.selected()
@@ -844,6 +872,7 @@ class ProjectsPage(QWidget):
         else:
             add("New task…", lambda: h.add_task(), "add", "Ctrl+N")
             add("Edit project…", self.edit_project, "edit")
+            add("Renumber tasks…", self.renumber, "checklist")
         if h._undo:
             menu.addSeparator()
             add(f"Undo {h._undo[-1][0]}", h.undo, "undo", "Ctrl+Z")

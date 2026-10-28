@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QCalendarWidget, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout,
 )
 
+from .. import numbering as NUM
 from ..config import SHORTCUT_HELP
 from ..utils import fmt_stamp
 from .helpers import set_kind, set_role
@@ -96,7 +97,7 @@ class HistoryDialog(FadeDialog):
         super().__init__(parent)
         self.setWindowTitle("Task history")
         self.setMinimumWidth(480)
-        lay = self._frame(task["title"], spacing=10)
+        lay = self._frame(NUM.titled(task), spacing=10)
         lay.addWidget(set_role(QLabel("ACTIVITY"), "label"))
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)

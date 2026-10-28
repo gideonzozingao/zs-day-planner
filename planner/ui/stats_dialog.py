@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from ..utils import fmt_duration, rgba
@@ -493,7 +494,7 @@ class StatsDialog(FadeDialog):
                 dot = QLabel("●")
                 dot.setStyleSheet(f"color: {STATUS.color(t['status'])};")
                 row.addWidget(dot)
-                name = QLabel(t["title"])
+                name = QLabel(NUM.titled(t))
                 name.setTextFormat(Qt.PlainText)
                 row.addWidget(name, 1)
                 row.addWidget(set_role(QLabel(f"ends {TS.to_dt(t['end_at']):%a %d %b %H:%M}"), "muted"))

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from ..data import reminder_sections
 from ..theme import make_icon
 from ..timespan import span_label
+from .. import numbering as NUM
 from .helpers import set_kind, set_role
 from .motion import animate
 
@@ -22,7 +23,7 @@ def _label(t):
     subs = f"  ({t['sub_done']}/{t['sub_total']})" if t.get("sub_total") else ""
     star = "★ " if t.get("pinned") else ""
     repeat = " ⟳" if t.get("recurrence") else ""
-    return f"{when}{star}{t['title']}{repeat}{subs}"
+    return f"{when}{star}{NUM.titled(t)}{repeat}{subs}"
 
 
 class ReminderPopup(QWidget):

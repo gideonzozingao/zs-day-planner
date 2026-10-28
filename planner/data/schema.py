@@ -11,10 +11,12 @@ v6: every task and project has a start and end date-time: tasks.start_at / end_a
     projects.start_at / end_at ('YYYY-MM-DDTHH:MM'). tasks.date / start_time / end_time are
     kept in step with start_at / end_at (start day, start time, end time) for indexes and
     older code paths. Older rows are filled in by Store._backfill_spans().
+v8: automatic numbering: tasks.number (per project, #1 #2 …) + tasks.sub_seq (subtask counter),
+    subtasks.number, projects.task_seq (task counter). Filled in by Store._backfill_numbers().
 Every CREATE uses IF NOT EXISTS; columns added to existing tables are listed in
 ADDED_COLUMNS and applied by Store._migrate(), so older databases upgrade in place.
 """
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -37,7 +39,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_pos  INTEGER NOT NULL DEFAULT 0,  -- order within the project
     start_at     TEXT NOT NULL DEFAULT '',    -- YYYY-MM-DDTHH:MM
     end_at       TEXT NOT NULL DEFAULT '',    -- YYYY-MM-DDTHH:MM, after start_at (may be days later)
-    status       TEXT NOT NULL DEFAULT 'open' -- open|in_progress|done|postponed|cancelled|blocked
+    status       TEXT NOT NULL DEFAULT 'open', -- open|in_progress|done|postponed|cancelled|blocked
+    number       INTEGER NOT NULL DEFAULT 0,  -- #n within its project (0 = not in a project)
+    sub_seq      INTEGER NOT NULL DEFAULT 0   -- last subtask number handed out
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_span ON tasks(start_at, end_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date);
@@ -57,7 +61,8 @@ CREATE TABLE IF NOT EXISTS projects (
     position     INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    task_seq     INTEGER NOT NULL DEFAULT 0   -- last task number handed out
 );
 
 CREATE TABLE IF NOT EXISTS tag_colors (
@@ -84,7 +89,8 @@ CREATE TABLE IF NOT EXISTS subtasks (
     title        TEXT NOT NULL,
     done         INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    number       INTEGER NOT NULL DEFAULT 0   -- 1, 2, … within its task (shown as 9.1 under #9)
 );
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id, position);
 
@@ -117,7 +123,8 @@ TASK_COLUMNS = {"date": "date", "start": "start_time", "end": "end_time",
                 "priority": "priority", "tags": "tags", "pinned": "pinned",
                 "recurrence": "recurrence", "recur_parent": "recur_parent",
                 "project_id": "project_id", "project_pos": "project_pos",
-                "start_at": "start_at", "end_at": "end_at", "status": "status"}
+                "start_at": "start_at", "end_at": "end_at", "status": "status",
+                "number": "number"}
 BOOL_FIELDS = ("done", "pinned")
 
 # columns added after a table first shipped: (table, column, definition)
@@ -134,6 +141,10 @@ ADDED_COLUMNS = [
     ("projects", "start_at", "TEXT NOT NULL DEFAULT ''"),
     ("projects", "end_at", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "status", "TEXT NOT NULL DEFAULT 'open'"),
+    ("tasks", "number", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "sub_seq", "INTEGER NOT NULL DEFAULT 0"),
+    ("subtasks", "number", "INTEGER NOT NULL DEFAULT 0"),
+    ("projects", "task_seq", "INTEGER NOT NULL DEFAULT 0"),
 ]
 # one-time data fixes run right after a column is added to an existing table
 ON_COLUMN_ADDED = {

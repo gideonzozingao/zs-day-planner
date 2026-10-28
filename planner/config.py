@@ -73,6 +73,7 @@ SHORTCUT_HELP = [
         ("Ctrl+I", "Cycle task status"),
         ("Alt+↑ / ↓", "Reorder tasks"),
         ("Delete", "Delete task or subtask (undoable)"),
+        ("Right-click project", "Renumber tasks #1, #2, … in current order"),
     ]),
     ("NAVIGATION", [
         ("Alt+← / →", "Previous / next day"),

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import recurrence as R
+from .. import numbering as NUM
 from .. import status as STATUS
 from .. import timespan as TS
 from ..quickparse import PRIORITY_NAMES, normalize_tags
@@ -38,7 +39,7 @@ class TaskDialog(FadeDialog):
         projects: project dicts offered in the Project field; project_id preselects one.
         workday: (HH:MM, HH:MM) used by the "Work day" button and for prefill without times."""
         super().__init__(parent)
-        title = "Edit task" if task else "New task"
+        title = (f"Edit task {NUM.task_no(task)}".strip()) if task else "New task"
         self.setWindowTitle(title)
         self.setMinimumWidth(560)
         self.workday = workday
@@ -132,13 +133,20 @@ class TaskDialog(FadeDialog):
         self.end.dateTimeChanged.connect(self._end_changed)
         self.project.currentIndexChanged.connect(self._update_info)
 
-        self.subtasks = SubtaskEditor(colors, subtasks)
+        self.subtasks = SubtaskEditor(colors, subtasks, task)
+        self._task = task
+        self.number_hint = set_role(QLabel(), "hint")
+        self.project.currentIndexChanged.connect(self._update_number_hint)
 
         form = QFormLayout()
         form.setVerticalSpacing(12)
         form.addRow("Task", self.title)
         if len(projects) or self.project.currentData():
-            form.addRow("Project", self.project)
+            prow = QHBoxLayout()
+            prow.addWidget(self.project, 1)
+            prow.addSpacing(8)
+            prow.addWidget(self.number_hint)
+            form.addRow("Project", prow)
         else:
             self.project.hide()
         form.addRow("Starts", self.start)
@@ -170,6 +178,7 @@ class TaskDialog(FadeDialog):
         lay.addWidget(self.subtasks)
         lay.addWidget(buttons)
         self._update_info()
+        self._update_number_hint()
         self.title.setFocus()
 
     def keyPressEvent(self, e):
@@ -233,6 +242,20 @@ class TaskDialog(FadeDialog):
         self.repeat.setItemText(self.repeat.findData(R.MONTHLY), f"Monthly on the {R._ordinal(d.day)}")
 
     # ---- meta
+    def _update_number_hint(self, *_):
+        """Show the task's number in the chosen project: its own, or the one it will get."""
+        pid = self.project.currentData() or ""
+        t = self._task
+        if not pid:
+            text = ""
+        elif t and t.get("project_id") == pid and t.get("number"):
+            text = f"#{t['number']}"
+        else:
+            p = self._projects.get(pid)
+            text = f"will be #{(p.get('task_seq') or 0) + 1}" if p else ""
+        self.number_hint.setText(text)
+        self.number_hint.setVisible(bool(text))
+
     def _set_meta(self, priority, tags, pinned):
         self.priority.setCurrentIndex(max(0, self.priority.findData(int(priority))))
         self.tags.setText(" ".join("#" + t for t in (tags or "").split()))
